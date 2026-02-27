@@ -5,31 +5,45 @@
 #include <pthread.h>
 
 /*
- * IMPLEMENTACIÓN LOCAL DE LA LÓGICA DE NEGOCIO.
- * Este archivo contiene la estructura de datos real (Lista Enlazada) y el Mutex.
- * Se compilará como 'libclaves.so'.
+ * IMPLEMENTACIÓN DEL SERVICIO (Parte A y Lógica del Servidor)
+ * Genera la librería: libclaves.so
+ *
+ * DECISIONES DE DISEÑO:
+ * 1. Estructura de Datos: TABLA HASH con encadenamiento para colisiones.
+ * 2. Gestión de Memoria: COPIA PROFUNDA (Deep Copy). Se duplican las cadenas
+ *    (key, value1) usando memoria dinámica.
+ * 3. Vector V2: Estático (float v[32]) dentro del nodo para optimizar
+ *    acceso y reducir fragmentación, dado que el límite es bajo.
+ * 4. Concurrencia: Uso de MUTEX global para proteger la tabla hash.
  */
 
-/* 
- * 1. DEFINICIÓN DE ESTRUCTURAS INTERNAS
- * Se definirá aquí el 'struct Node' para la lista enlazada.
- * Contendrá: key, value1, N_value2, v_value2, value3, y struct Node *next.
- */
+// Tamaño de la tabla hash (número de buckets)
+#define HASH_SIZE 1024
+
+/* Estructura del Nodo para la Tabla Hash */
+typedef struct Node {
+    char *key;                  // Copia dinámica
+    char *value1;               // Copia dinámica
+    int N_value2;
+    float V_value2[32];         // Almacenamiento estático
+    struct Paquete value3;
+    struct Node *next;          // Puntero para colisiones
+} Node;
+
+// Tabla Hash Global
+Node *tabla_hash[HASH_SIZE];
+
+// Mutex para exclusión mutua (Thread-Safety)
+pthread_mutex_t mutex = PTHREAD_MUTEX_INITIALIZER;
+
+// Flag de inicialización
+int inicializado = 0;
+
+/* FUNCIONES INTERNAS */
+// unsigned int hash_function(const char *str);
 
 /* 
- * 2. VARIABLES GLOBALES
- * - Puntero 'head' al inicio de la lista.
- * - Mutex global (pthread_mutex_t) para proteger el acceso concurrente a la lista
- *   (necesario porque el servidor lanzará hilos concurrentes que usarán esta librería).
- */
-
-/* 
- * 3. IMPLEMENTACIÓN DE LAS FUNCIONES DE LA API (init, set_value, get_value...)
- * Cada función seguirá este patrón:
- *    a. Bloquear el mutex (pthread_mutex_lock).
- *    b. Realizar la operación en la lista (recorrer, insertar, copiar datos, borrar).
- *       Nota: Usar strncpy/memcpy para guardar copias profundas de los datos, 
- *       no guardar solo los punteros recibidos.
- *    c. Desbloquear el mutex (pthread_mutex_unlock).
- *    d. Devolver el resultado (0, 1, o -1).
+ * IMPLEMENTACIÓN DE LA API (init, set_value, get_value, etc.)
+ * Todas las funciones siguen el esquema:
+ * Lock -> Operación en Tabla Hash -> Unlock -> Return
  */

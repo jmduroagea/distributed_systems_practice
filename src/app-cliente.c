@@ -3,26 +3,29 @@
 // ...
 
 /*
- * APLICACIÓN DE PRUEBA.
- * Este programa testea el funcionamiento del servicio.
- * Es agnóstico a si se está usando la versión local o la distribuida
- * (dependerá de con qué librería se enlace en el Makefile).
+ * PROGRAMA DE PRUEBAS
+ * Genera ejecutables: 
+ * - cliente_local (enlazado con libclaves.so)
+ * - cliente_dist (enlazado con libproxyclaves.so)
+ *
+ * OBJETIVO:
+ * Validar que la API funciona correctamente (insertar, buscar, borrar)
+ * independientemente de si es local o distribuido.
  */
 
 int main() {
     /*
-     * BATERÍA DE PRUEBAS
-     * 1. Llamar a init().
-     * 2. Insertar una tupla válida (set_value).
-     * 3. Intentar insertar una tupla duplicada (debe fallar).
-     * 4. Recuperar la tupla (get_value) y comprobar que los datos son correctos.
-     * 5. Modificar la tupla (modify_value).
-     * 6. Comprobar existencia (exist).
-     * 7. Borrar tupla (delete_key).
-     * 8. Verificar que ya no existe.
-     *
-     * Imprimir resultados por pantalla para verificar visualmente.
+     * Flujo de prueba sugerido:
+     * 1. init().
+     * 2. set_value() con tupla <"clave1", "val1", 3, vec, struct>.
+     * 3. set_value() con tupla <"clave2", ...>.
+     * 4. get_value("clave1") -> Verificar datos.
+     * 5. modify_value("clave1") -> Cambiar datos.
+     * 6. get_value("clave1") -> Verificar cambios.
+     * 7. exist("clave1") -> Debe ser 1.
+     * 8. delete_key("clave1").
+     * 9. exist("clave1") -> Debe ser 0.
+     * 10. Pruebas de error (insertar duplicado, borrar inexistente).
      */
-    
     return 0;
 }

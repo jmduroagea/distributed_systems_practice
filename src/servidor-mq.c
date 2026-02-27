@@ -1,41 +1,38 @@
-#include "claves.h"     // Para llamar a la lógica real (libclaves.so)
-#include "mensajes.h"   // Para entender los structs Peticion/Respuesta
+#include "claves.h"     // Enlaza con libclaves.so (Parte A)
+#include "mensajes.h"
 #include <mqueue.h>
 #include <pthread.h>
 #include <stdio.h>
 #include <stdlib.h>
-// ... otros includes
 
 /*
- * EJECUTABLE DEL SERVIDOR.
- * Encargado de recibir mensajes, lanzar hilos y coordinar la respuesta.
+ * EJECUTABLE DEL SERVIDOR (Parte B)
+ * Nombre del ejecutable: servidor-mq
+ *
+ * FUNCIONAMIENTO:
+ * - Servidor Concurrente: Hilos bajo demanda.
+ * - Comunicación: Colas de mensajes POSIX.
+ * - Lógica: Delega en libclaves.so.
  */
 
-/* 
- * 1. DEFINICIÓN DE CONSTANTES
- * - Nombre de la cola del servidor (ej: "/SERVIDOR_MQ").
- * - Tamaño de los mensajes y capacidad de la cola.
+#define SERVER_QUEUE_NAME "/COLA_SERVIDOR"
+
+/*
+ * Hilo Trabajador (Worker Thread)
+ * 1. Recibe 'struct Peticion' como argumento.
+ * 2. Abre la cola del cliente (q_name).
+ * 3. Switch(op_code):
+ *    - Llama a la función real (ej: set_value) de claves.c.
+ * 4. Prepara 'struct Respuesta' con el resultado.
+ * 5. Envía respuesta.
+ * 6. Cierra cola cliente y termina.
  */
 
 /*
- * 2. FUNCIÓN DEL HILO TRABAJADOR (Worker Thread)
- * Esta función es la que ejecuta pthread_create.
- *    a. Recibe el mensaje (struct Peticion) como argumento.
- *    b. Abre la cola del cliente especificada en el mensaje.
- *    c. Según 'op_code', llama a la función correspondiente de 'claves.c' (init, set, get...).
- *    d. Prepara 'struct Respuesta' con el resultado y los datos de salida (si es un get).
- *    e. Envía la respuesta (mq_send) a la cola del cliente.
- *    f. Cierra la cola del cliente.
- *    g. Termina el hilo.
- */
-
-/*
- * 3. FUNCIÓN MAIN
- *    a. Crear la cola del servidor (mq_open con O_CREAT). Configurar atributos attr.
- *    b. Bucle infinito (while 1):
- *       - mq_receive: Bloquearse esperando una petición.
- *       - Al recibir, reservar memoria para el mensaje o pasarlo por valor.
- *       - pthread_create: Lanzar un hilo trabajador pasándole el mensaje.
- *       - pthread_detach: Para no tener que esperar a que el hilo termine.
- *    c. Código de limpieza (cerrar colas) en caso de señal de terminación (opcional).
+ * Main
+ * 1. Crea la cola del servidor.
+ * 2. Bucle infinito:
+ *    - mq_receive (Bloqueante).
+ *    - pthread_create (Pasa el mensaje al hilo).
+ *    - pthread_detach (Para liberar recursos al terminar el hilo).
  */

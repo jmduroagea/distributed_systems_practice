@@ -4,46 +4,53 @@
 #include "claves.h"
 
 /*
- * ESTE ARCHIVO DEFINE EL PROTOCOLO DE COMUNICACIÓN.
- * Será incluido tanto por el Proxy (Cliente) como por el Servidor.
+ * PROTOCOLO DE COMUNICACIÓN (Parte B)
+ * Este archivo define los formatos de intercambio de datos entre el Cliente (Proxy)
+ * y el Servidor a través de las colas de mensajes POSIX.
  */
 
-/* 
- * 1. DEFINICIÓN DE CÓDIGOS DE OPERACIÓN
- * Se definirán constantes para identificar qué función se está solicitando.
- * Ejemplo: 
- * #define OP_INIT    0
- * #define OP_SET     1
- * #define OP_GET     2
- * ...
- */
+/* 1. CÓDIGOS DE OPERACIÓN */
+/* Identifican qué función de la API se desea ejecutar */
+#define OP_INIT    0
+#define OP_SET     1
+#define OP_GET     2
+#define OP_MODIFY  3
+#define OP_DELETE  4
+#define OP_EXIST   5
+
+/* Definiciones de límites para las estructuras de mensajería */
+#define MAX_KEY_LEN 256
+#define MAX_VAL1_LEN 256
+#define MAX_VEC_LEN 32
 
 /* 
- * 2. ESTRUCTURA DEL MENSAJE DE PETICIÓN (CLIENTE -> SERVIDOR)
- * Esta estructura debe contener todos los campos necesarios para realizar cualquier operación.
- * Campos necesarios:
- * - Código de operación (int).
- * - Nombre de la cola del cliente (char array) para que el servidor sepa dónde responder.
- * - Clave (char array).
- * - Valor1 (char array).
- * - N_value2 (int).
- * - Vector value2 (float array[32]).
- * - Estructura value3 (struct Paquete).
- *
- * Nota: Dado que mq_receive requiere un buffer fijo, esta estructura debe ser
- * la unión de todos los parámetros posibles. Si una operación (ej. delete) 
- * no usa 'valor1', ese campo simplemente se ignorará en el servidor.
+ * 2. ESTRUCTURA DEL MENSAJE DE PETICIÓN (Cliente -> Servidor)
+ * Contiene la unión de todos los argumentos posibles de las funciones de la API.
  */
+typedef struct {
+    int op_code;                    // Código de operación (OP_SET, OP_GET, etc.)
+    char q_name[MAX_KEY_LEN];       // Nombre de la cola de respuesta del cliente (/cola_pid)
+    
+    // Datos de la tupla (usados según la operación)
+    char key[MAX_KEY_LEN];          
+    char value1[MAX_VAL1_LEN];
+    int N_value2;                   
+    float V_value2[MAX_VEC_LEN];    // Vector estático [32]
+    struct Paquete value3;
+} Peticion;
 
 /* 
- * 3. ESTRUCTURA DEL MENSAJE DE RESPUESTA (SERVIDOR -> CLIENTE)
- * Esta estructura contiene el resultado de la operación.
- * Campos necesarios:
- * - Código de retorno (int): 0 para éxito, -1 para error lógica, -2 error comms.
- * - Valor1 (char array) -> Solo útil para get_value.
- * - N_value2 (int) -> Solo útil para get_value.
- * - Vector value2 (float array[32]) -> Solo útil para get_value.
- * - Estructura value3 (struct Paquete) -> Solo útil para get_value.
+ * 3. ESTRUCTURA DEL MENSAJE DE RESPUESTA (Servidor -> Cliente)
+ * Contiene el resultado de la operación y los datos de salida si procede.
  */
+typedef struct {
+    int result;                     // 0 (éxito), -1 (error lógico), -2 (error coms - gestionado por proxy)
+    
+    // Datos de retorno (solo para OP_GET)
+    char value1[MAX_VAL1_LEN];
+    int N_value2;
+    float V_value2[MAX_VEC_LEN];
+    struct Paquete value3;
+} Respuesta;
 
 #endif

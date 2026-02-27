@@ -3,37 +3,38 @@
 #include <mqueue.h>
 #include <stdio.h>
 #include <stdlib.h>
-// ... otros includes (string.h, unistd.h para getpid, etc.)
+// ...
 
 /*
- * IMPLEMENTACIÓN DEL CLIENTE DISTRIBUIDO (PROXY).
- * Este archivo implementa la misma API que 'claves.c' pero NO guarda datos.
- * Su función es empaquetar peticiones y enviarlas al servidor.
- * Se compilará como 'libproxyclaves.so'.
+ * IMPLEMENTACIÓN DEL CLIENTE (Parte B - Proxy)
+ * Genera la librería: libproxyclaves.so
+ *
+ * RESPONSABILIDAD:
+ * - Ofrece la misma API que claves.c.
+ * - No almacena datos.
+ * - Empaqueta los argumentos en struct Peticion.
+ * - Envía la petición a la cola del servidor.
+ * - Espera la respuesta en una cola privada única por proceso.
  */
 
-/* 
- * 1. VARIABLES GLOBALES (Privadas al proxy)
- * - Descriptor de la cola del servidor (mqd_t).
- * - Descriptor de la cola de respuesta del cliente (mqd_t).
- * - Nombre de la cola del cliente (basado en PID).
+/* Variables globales del proxy */
+// mqd_t server_queue;
+// mqd_t client_queue;
+// char client_queue_name[256];
+
+/*
+ * init()
+ * - Genera nombre de cola único usando getpid().
+ * - Crea la cola del cliente (bloqueante).
+ * - Abre la cola del servidor.
+ * - Envía OP_INIT si es necesario.
  */
 
 /*
- * 2. FUNCIONES AUXILIARES
- * - Una función para inicializar las colas si es la primera vez que se llama a la API.
- *   Debe generar un nombre único (/cola_cliente_<pid>), crearla y abrir la del servidor.
- */
-
-/* 
- * 3. IMPLEMENTACIÓN DE LAS FUNCIONES DE LA API
- * Ejemplo para set_value(...):
- *    a. Asegurar que las colas están abiertas.
- *    b. Crear una instancia de 'struct Peticion'.
- *    c. Rellenar 'op_code' = OP_SET.
- *    d. Copiar los parámetros (key, values...) en la estructura.
- *    e. Enviar mensaje (mq_send) a la cola del servidor.
- *    f. Esperar respuesta (mq_receive) en la cola del cliente.
- *    g. Analizar 'struct Respuesta' y devolver el código de retorno.
- *    h. Manejar errores: Si falla el envío/recepción, devolver -2.
+ * set_value(), get_value(), etc.
+ * - Serializan los parámetros en 'struct Peticion'.
+ * - mq_send() -> Servidor.
+ * - mq_receive() <- Servidor (bloqueante).
+ * - Desempaquetan 'struct Respuesta' y retornan valores.
+ * - Retornan -2 en caso de fallo de mq_send/mq_receive.
  */
