@@ -1,0 +1,18 @@
+# Archivos objeto y librerías dinámicas
+*.o
+*.so
+
+# Ejecutables (nombres definidos en el Makefile)
+servidor
+cliente_local
+cliente_dist
+servidor-mq
+
+# Archivos de sistema y editores
+.DS_Store
+.vscode/
+*.swp
+*~
+
+# Colas de mensajes (si se crearan en local por error)
+/dev/mqueue/*
