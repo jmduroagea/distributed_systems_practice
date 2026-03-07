@@ -1,6 +1,6 @@
 # OPCIONES DE COMPILACIÓN
 CC = gcc
-CFLAGS = -Wall -g -I./include
+CFLAGS = -Wall -g -I./include -I./xxhash
 LIBS = -lrt -lpthread
 
 # OBJETIVOS
@@ -11,10 +11,11 @@ folders:
 	@mkdir -p src include
 
 # 1. PARTE A: LIBRERÍA LOCAL (libclaves.so)
-# Compila claves.c con -fPIC para crear código reubicable y luego la librería compartida
-libclaves.so: src/claves.c
+# Compila claves.c y xxhash.c con -fPIC para crear código reubicable y luego la librería compartida
+libclaves.so: src/claves.c xxhash/xxhash.c
+	$(CC) $(CFLAGS) -fPIC -c xxhash/xxhash.c -o xxhash.o
 	$(CC) $(CFLAGS) -fPIC -c src/claves.c -o claves.o
-	$(CC) -shared -o libclaves.so claves.o
+	$(CC) -shared -o libclaves.so claves.o xxhash.o
 
 # 2. PARTE B: LIBRERÍA PROXY (libproxyclaves.so)
 # Compila proxy-mq.c
