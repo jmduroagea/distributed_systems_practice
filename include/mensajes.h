@@ -1,56 +1,80 @@
 #ifndef MENSAJES_H
 #define MENSAJES_H
 
-#include "claves.h"
+#include "claves.h" // Necesario para struct Paquete [cite: 4]
 
 /*
- * PROTOCOLO DE COMUNICACIÓN (Parte B)
- * Este archivo define los formatos de intercambio de datos entre el Cliente (Proxy)
- * y el Servidor a través de las colas de mensajes POSIX.
+ * PROTOCOLO DE COMUNICACIÓN (RPC Distribuido)
+ * Este archivo define los formatos de intercambio de datos entre el Proxy
+ * y el Servidor utilizando colas de mensajes POSIX.
  */
 
-/* 1. CÓDIGOS DE OPERACIÓN */
-/* Identifican qué función de la API se desea ejecutar */
-#define OP_INIT    0
-#define OP_SET     1
-#define OP_GET     2
-#define OP_MODIFY  3
-#define OP_DELETE  4
-#define OP_EXIST   5
+// =========================================================
+// CONSTANTES ARQUITECTÓNICAS
+// =========================================================
+#define SERVER_QUEUE "/claves_server_req"
+#define MAX_QUEUE_NAME 64
 
-/* Definiciones de límites para las estructuras de mensajería */
-#define MAX_KEY_LEN 256
-#define MAX_VAL1_LEN 256
-#define MAX_VEC_LEN 32
+// Límites estrictos definidos por el enunciado
+#define MAX_KEY_LEN 256  // 255 caracteres + '\0' [cite: 8]
+#define MAX_VAL1_LEN 256 // 255 caracteres + '\0' [cite: 10]
+#define MAX_VEC_LEN 32   // Máximo de elementos en vector float [cite: 11, 13]
 
-/* 
- * 2. ESTRUCTURA DEL MENSAJE DE PETICIÓN (Cliente -> Servidor)
- * Contiene la unión de todos los argumentos posibles de las funciones de la API.
+// =========================================================
+// CÓDIGOS DE OPERACIÓN
+// =========================================================
+typedef enum {
+    OP_INIT = 0, // destroy()
+    OP_SET,      // set_value()
+    OP_GET,      // get_value()
+    OP_MODIFY,   // modify_value()
+    OP_DELETE,   // delete_key()
+    OP_EXIST     // exist()
+} Operacion;
+
+// =========================================================
+// PAYLOADS DE LA PETICIÓN (Estrategia de Unión)
+// =========================================================
+// Usado por OP_SET y OP_MODIFY
+typedef struct {
+    char key[MAX_KEY_LEN];
+    char value1[MAX_VAL1_LEN];
+    int N_value2;
+    float V_value2[MAX_VEC_LEN];
+    struct Paquete value3;       // Estructura cliente [cite: 14]
+} PayloadEscribir;
+
+// Usado por OP_GET, OP_DELETE y OP_EXIST
+typedef struct {
+    char key[MAX_KEY_LEN];
+} PayloadLeer;
+
+/* * 2. ESTRUCTURA DEL MENSAJE DE PETICIÓN (Cliente -> Servidor)
  */
 typedef struct {
-    int op_code;                    // Código de operación (OP_SET, OP_GET, etc.)
-    char q_name[MAX_KEY_LEN];       // Nombre de la cola de respuesta del cliente (/cola_pid)
+    Operacion op_code;                      // Qué función ejecutar
+    unsigned int id_correlacion;            // ID único para evitar cruce de mensajes
+    char q_name[MAX_QUEUE_NAME];            // Cola de respuesta (/claves_resp_PID_TID)
     
-    // Datos de la tupla (usados según la operación)
-    char key[MAX_KEY_LEN];          
-    char value1[MAX_VAL1_LEN];
-    int N_value2;                   
-    float V_value2[MAX_VEC_LEN];    // Vector estático [32]
-    struct Paquete value3;
+    // La unión fuerza a que la estructura mida siempre lo mismo (seguro para POSIX)
+    // pero aísla conceptualmente los datos.
+    union {
+        PayloadEscribir escritura;
+        PayloadLeer lectura;
+    } payload;
 } Peticion;
 
-/* 
- * 3. ESTRUCTURA DEL MENSAJE DE RESPUESTA (Servidor -> Cliente)
- * Contiene el resultado de la operación y los datos de salida si procede.
+/* * 3. ESTRUCTURA DEL MENSAJE DE RESPUESTA (Servidor -> Cliente)
  */
 typedef struct {
-    int result;                     // 0 (éxito), -1 (error lógico), -2 (error coms - gestionado por proxy)
+    unsigned int id_correlacion;    // El servidor debe devolver el mismo ID recibido
+    int result;                     // 0 (éxito), -1 (error tupla), -2 (error coms) [cite: 119]
     
-    // Datos de retorno (solo para OP_GET)
+    // Datos de retorno (obligatorio llenarlos solo para OP_GET) [cite: 34, 35, 36]
     char value1[MAX_VAL1_LEN];
     int N_value2;
     float V_value2[MAX_VEC_LEN];
     struct Paquete value3;
 } Respuesta;
 
-#endif
+#endif // MENSAJES_H
