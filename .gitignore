@@ -13,6 +13,8 @@ servidor-mq
 .vscode/
 *.swp
 *~
+.devcontainer
 
 # Colas de mensajes (si se crearan en local por error)
 /dev/mqueue/*
+compile_commands.json

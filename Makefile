@@ -55,3 +55,30 @@ test-distribuido: all
 # LIMPIEZA
 clean:
 	rm -f *.o *.so servidor_mq cliente_local cliente_dist
+
+CLIENTES_DIST = cliente_dist_1 cliente_dist_2 cliente_dist_3 cliente_dist_4 \
+                cliente_dist_5 cliente_dist_6 cliente_dist_7 cliente_dist_8 \
+                cliente_dist_9 cliente_dist_10
+
+clientes_dist: $(CLIENTES_DIST)
+
+cliente_dist_%: src/app-cliente-%.c libproxyclaves.so
+	$(CC) $(CFLAGS) -o $@ $< -L. -lproxyclaves $(LIBS) $(RPATH)
+
+test_concurrente: all clientes_dist
+	chmod +x ./src/test_concurrente.sh
+	./src/test_concurrente.sh > resultado_concurrente.txt
+
+# Cliente stress test (local y distribuido)
+app-cliente-stress-local: src/app-cliente-stress.c libclaves.so
+	$(CC) $(CFLAGS) -DMODO_LOCAL -o app-cliente-stress-local src/app-cliente-stress.c -L. -lclaves $(LIBS) $(RPATH)
+
+app-cliente-stress-dist: src/app-cliente-stress.c libproxyclaves.so
+	$(CC) $(CFLAGS) -o app-cliente-stress-dist src/app-cliente-stress.c -L. -lproxyclaves $(LIBS) $(RPATH)
+
+# Stress tests
+stress-local: app-cliente-stress-local
+	./stress_validator.sh --modo local --no-servidor --cliente ./app-cliente-stress-local
+
+stress-dist: app-cliente-stress-dist servidor_mq
+	./stress_validator.sh --modo dist --cliente ./app-cliente-stress-dist --limpiar
