@@ -1,7 +1,7 @@
 #ifndef MENSAJES_H
 #define MENSAJES_H
 
-#include "claves.h" // Necesario para struct Paquete [cite: 4]
+#include "../include/claves.h" // Necesario para struct Paquete [cite: 4]
 
 /*
  * PROTOCOLO DE COMUNICACIÓN (RPC Distribuido)

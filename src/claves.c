@@ -10,7 +10,8 @@
 
 #define _GNU_SOURCE // Required for POSIX pthread_barrier_t on some Linux systems
 
-#include "claves.h"
+#include "../include/claves.h"
+#include "../xxhash/xxhash.h"
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -18,7 +19,6 @@
 #include <stdatomic.h>
 #include <stdalign.h>
 #include <stdbool.h>
-#include <xxhash.h>
 
 /* ========================================================================= *
  * ARCHITECTURAL CONSTANTS
@@ -106,11 +106,11 @@ pthread_rwlock_t global_stw_rwlock = PTHREAD_RWLOCK_INITIALIZER;
  * ========================================================================= */
 
 // XXH3 operates at RAM-speed limits, utilizing CPU vector instructions for short strings.
-inline uint64_t hash_function(const char *key) {
+static inline uint64_t hash_function(const char *key) {
     return XXH3_64bits(key, strlen(key));
 }
 
-inline int get_segment(uint32_t index, uint32_t capacity) {
+static inline int get_segment(uint32_t index, uint32_t capacity) {
     return (index / (capacity / NUM_SEGMENTS)) % NUM_SEGMENTS;
 }
 
@@ -120,7 +120,7 @@ inline int get_segment(uint32_t index, uint32_t capacity) {
  * from reordering instructions across the lock boundaries.
  * Even sequence = unlocked. Odd sequence = currently locked by a writer.
  */
-inline unsigned read_begin(atomic_uint *lock) {
+static inline unsigned read_begin(atomic_uint *lock) {
     unsigned seq;
     while (true) {
         seq = atomic_load_explicit(lock, memory_order_acquire);
@@ -128,12 +128,12 @@ inline unsigned read_begin(atomic_uint *lock) {
     }
 }
 
-inline bool read_retry(atomic_uint *lock, unsigned start_seq) {
+static inline bool read_retry(atomic_uint *lock, unsigned start_seq) {
     atomic_thread_fence(memory_order_acquire);
     return atomic_load_explicit(lock, memory_order_relaxed) != start_seq;
 }
 
-inline void write_lock(atomic_uint *lock) {
+static inline void write_lock(atomic_uint *lock) {
     unsigned expected;
     while (true) {
         expected = atomic_load_explicit(lock, memory_order_relaxed);
@@ -146,7 +146,7 @@ inline void write_lock(atomic_uint *lock) {
     }
 }
 
-inline void write_unlock(atomic_uint *lock) {
+static inline void write_unlock(atomic_uint *lock) {
     // Release the lock by incrementing back to an even number
     atomic_fetch_add_explicit(lock, 1, memory_order_release);
 }
