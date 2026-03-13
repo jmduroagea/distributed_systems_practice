@@ -26,7 +26,7 @@ bold() { echo -e "${BOLD}$*${RESET}"; }
 # ── Defaults ─────────────────────────────────────────────────────────────────
 MODO="dist"
 N_CLIENTES=50
-CLIENTE_EXE="./src/app-cliente-stress"
+CLIENTE_EXE="./src/app-cliente"
 SERVIDOR_EXE="./servidor_mq"
 TIMEOUT=30
 LIMPIAR=0
