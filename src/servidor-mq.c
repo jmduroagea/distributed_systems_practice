@@ -1,7 +1,7 @@
 /**
  * @file servidor-mq.c
  * @brief Servidor concurrente usando Colas de Mensajes POSIX y un Pool de Hilos
- * Simétrico.
+ *        Simétrico.
  */
 
 #include <errno.h>
@@ -18,7 +18,7 @@
 #include "../include/claves.h"
 #include "../include/mensajes.h"
 
-#define DEBUG_MODE 1 // Set to 0 to silence terminal output for final submission
+#define DEBUG_MODE 0 // Set to 1 to enable logging
 
 #if DEBUG_MODE
 #define LOG_INFO(...)                                                          \
@@ -36,173 +36,173 @@
 #define LOG_ERR(...)
 #endif
 
-// Variables globales para el manejo seguro de señales
 mqd_t q_servidor = (mqd_t)-1;
 atomic_int server_running = 1;
 
 /* ========================================================================= *
- * FUNCIONES AUXILIARES Y DE SISTEMA
+ * SEÑALES
  * ========================================================================= */
-
-/**
- * @brief Manejador de señales para un apagado elegante (Graceful Shutdown)
- */
 void handle_sigint(int sig) {
+  (void)sig;
   server_running = 0;
-  LOG_INFO("Señal SIGINT recibida. Apagando servidor...\n");
-
   if (q_servidor != (mqd_t)-1) {
     mq_close(q_servidor);
-    // Al cerrar la cola, los hilos bloqueados en mq_receive despertarán con
-    // EBADF
     mq_unlink(SERVER_QUEUE);
+    q_servidor = (mqd_t)-1;
   }
-
-  LOG_INFO("Limpieza de colas completada. Adiós.\n");
   exit(0);
 }
 
-/**
- * @brief Lee el límite de profundidad de colas impuesto por el kernel de Linux
- */
+/* ========================================================================= *
+ * HELPERS
+ * ========================================================================= */
 long get_max_queue_depth() {
   FILE *f = fopen("/proc/sys/fs/mqueue/msg_max", "r");
-  long max_msg = 10; // Fallback seguro de POSIX
-  if (f != NULL) {
-    if (fscanf(f, "%ld", &max_msg) == 1) {
-      fclose(f);
-      return max_msg;
-    }
+  long max_msg = 10;
+  if (f) {
+    fscanf(f, "%ld", &max_msg);
     fclose(f);
   }
   return max_msg;
 }
 
-/**
- * @brief Envía la respuesta al cliente usando la estrategia de Micro-Reintentos
- */
-void enviar_respuesta(const char *cola_cliente, Respuesta *resp) {
-  mqd_t q_client = mq_open(cola_cliente, O_WRONLY);
-  if (q_client == (mqd_t)-1) {
-    LOG_ERR("Cola cliente %s no existe. Cliente desconectado.\n", cola_cliente);
+// Envía RespSimple (4 bytes) — para destroy, set, modify, delete, exist
+static void responder_simple(const char *q_name, int result) {
+  mqd_t q = mq_open(q_name, O_WRONLY);
+  if (q == (mqd_t)-1) {
+    perror(q_name); // <-- temporal
     return;
   }
+  RespSimple r = {.result = result};
 
-  int retries = 3;
-  int success = 0;
-
-  while (retries > 0 && !success) {
-    struct timespec timeout;
-    clock_gettime(CLOCK_REALTIME, &timeout);
-    timeout.tv_nsec += 50000000; // 50 milisegundos de timeout
-    if (timeout.tv_nsec >= 1000000000) {
-      timeout.tv_sec++;
-      timeout.tv_nsec -= 1000000000;
-    }
-
-    if (mq_timedsend(q_client, (const char *)resp, sizeof(Respuesta), 0,
-                     &timeout) == 0) {
-      success = 1;
-    } else {
-      if (errno == EINTR || errno == ETIMEDOUT || errno == EAGAIN) {
-        usleep(10000); // Esperar 10ms antes de reintentar
-        retries--;
-      } else {
-        break; // Error fatal de la cola, abortar
-      }
-    }
+  struct timespec timeout;
+  clock_gettime(CLOCK_REALTIME, &timeout);
+  timeout.tv_nsec += 50000000;
+  if (timeout.tv_nsec >= 1000000000) {
+    timeout.tv_sec++;
+    timeout.tv_nsec -= 1000000000;
   }
 
-  if (!success) {
-    LOG_ERR("Imposible enviar respuesta a %s tras 3 intentos.\n", cola_cliente);
+  if (mq_timedsend(q, (const char *)&r, sizeof(RespSimple), 0, &timeout) == -1)
+    LOG_ERR("mq_timedsend RespSimple a %s falló.\n", q_name);
+
+  mq_close(q);
+}
+
+// Envía RespGet (404 bytes) — solo para get_value
+static void responder_get(const char *q_name, RespGet *r) {
+  mqd_t q = mq_open(q_name, O_WRONLY);
+  if (q == (mqd_t)-1) {
+    LOG_ERR("Cola cliente %s no existe.\n", q_name);
+    return;
+  }
+  struct timespec timeout;
+  clock_gettime(CLOCK_REALTIME, &timeout);
+  timeout.tv_nsec += 50000000;
+  if (timeout.tv_nsec >= 1000000000) {
+    timeout.tv_sec++;
+    timeout.tv_nsec -= 1000000000;
   }
 
-  mq_close(q_client);
+  if (mq_timedsend(q, (const char *)r, sizeof(RespGet), 0, &timeout) == -1)
+    LOG_ERR("mq_timedsend RespGet a %s falló.\n", q_name);
+
+  mq_close(q);
 }
 
 /* ========================================================================= *
- * HILO TRABAJADOR (SYMMETRIC WORKER POOL)
+ * HILO TRABAJADOR
  * ========================================================================= */
-
 void *worker_thread(void *arg) {
   int thread_id = *(int *)arg;
   free(arg); // Liberar memoria del ID
+  (void)thread_id;
 
-  Peticion req;
-  Respuesta resp;
+  // Buffer de recepción del tamaño máximo posible
+  char buf[sizeof(Peticion)];
   unsigned int prio;
 
-  LOG_INFO("Worker %d iniciado y esperando peticiones.\n", thread_id);
+  LOG_INFO("Worker %d iniciado.\n", thread_id);
 
   while (server_running) {
-    // Bloqueo eficiente esperando mensajes. El kernel despierta a UN solo hilo.
-    ssize_t bytes_read =
-        mq_receive(q_servidor, (char *)&req, sizeof(Peticion), &prio);
+    // Esperar por una petición (bloqueante)
+    ssize_t bytes = mq_receive(q_servidor, buf, sizeof(Peticion), &prio);
 
-    if (bytes_read == -1) {
+    if (bytes == -1) {
       if (errno == EBADF || errno == EINVAL)
-        break; // Cola cerrada por SIGINT
+        break; // Cola cerrada o inválida, salir del loop
       continue;
     }
 
-    // Preparar la plantilla de respuesta básica
-    memset(&resp, 0, sizeof(Respuesta));
-    resp.id_correlacion = req.id_correlacion;
+    // Obtener la petición del buffer
+    Peticion *req = (Peticion *)buf;
 
-    // Despachador de funciones de libclaves.so
-    switch (req.op_code) {
-    case OP_INIT:
-      resp.result = destroy(); // Inicializa el servicio
-      LOG_INFO("Worker %d ejecutó destroy(). Resultado: %d\n", thread_id,
-               resp.result);
+    // Procesar la petición según su op_code
+    switch (req->op_code) {
+
+    case OP_INIT: {
+      int res =
+          destroy(); // Reutilizamos destroy() para limpiar la tabla al iniciar
+      LOG_INFO("Worker %d: destroy() = %d\n", thread_id, res);
+      responder_simple(req->q_name, res);
       break;
-
-    case OP_SET:
-      resp.result = set_value(
-          req.payload.escritura.key, req.payload.escritura.value1,
-          req.payload.escritura.N_value2, req.payload.escritura.V_value2,
-          req.payload.escritura.value3); // Inserta el elemento
-      LOG_INFO("Worker %d ejecutó set_value('%s'). Resultado: %d\n", thread_id,
-               req.payload.escritura.key, resp.result);
-      break;
-
-    case OP_GET:
-      // Las variables se pasan por referencia para ser rellenadas
-      resp.result = get_value(req.payload.lectura.key, resp.value1,
-                              &resp.N_value2, resp.V_value2,
-                              &resp.value3); // Obtiene los valores
-      LOG_INFO("Worker %d ejecutó get_value('%s'). Resultado: %d\n", thread_id,
-               req.payload.lectura.key, resp.result);
-      break;
-
-    case OP_MODIFY:
-      resp.result = modify_value(
-          req.payload.escritura.key, req.payload.escritura.value1,
-          req.payload.escritura.N_value2, req.payload.escritura.V_value2,
-          req.payload.escritura.value3); // Modifica los valores
-      LOG_INFO("Worker %d ejecutó modify_value('%s'). Resultado: %d\n",
-               thread_id, req.payload.escritura.key, resp.result);
-      break;
-
-    case OP_DELETE:
-      resp.result = delete_key(req.payload.lectura.key); // Borra el elemento
-      LOG_INFO("Worker %d ejecutó delete_key('%s'). Resultado: %d\n", thread_id,
-               req.payload.lectura.key, resp.result);
-      break;
-
-    case OP_EXIST:
-      resp.result = exist(req.payload.lectura.key); // Determina si existe
-      LOG_INFO("Worker %d ejecutó exist('%s'). Resultado: %d\n", thread_id,
-               req.payload.lectura.key, resp.result);
-      break;
-
-    default:
-      resp.result = -1; // Error lógico devuelto al cliente
-      LOG_ERR("Código de operación desconocido: %d\n", req.op_code);
     }
 
-    // Responder al cliente
-    enviar_respuesta(req.q_name, &resp);
+    case OP_SET: {
+      int res = set_value(
+          req->payload.escritura.key, req->payload.escritura.value1,
+          req->payload.escritura.N_value2, req->payload.escritura.V_value2,
+          req->payload.escritura.value3); // Rellenamos el payload de escritura
+      LOG_INFO("Worker %d: set_value('%s') = %d\n", thread_id,
+               req->payload.escritura.key, res);
+      responder_simple(req->q_name, res);
+      break;
+    }
+
+    case OP_GET: {
+      RespGet r; // Estructura para la respuesta del get_value
+      // Pasamos las variables por referencia para que get_value las rellene
+      r.result = get_value(req->payload.lectura.key, r.value1, &r.N_value2,
+                           r.V_value2, &r.value3);
+      LOG_INFO("Worker %d: get_value('%s') = %d\n", thread_id,
+               req->payload.lectura.key, r.result);
+      responder_get(req->q_name, &r);
+      break;
+    }
+
+    case OP_MODIFY: {
+      int res = modify_value(
+          req->payload.escritura.key, req->payload.escritura.value1,
+          req->payload.escritura.N_value2, req->payload.escritura.V_value2,
+          req->payload.escritura.value3); // Rellenamos el payload de escritura
+      LOG_INFO("Worker %d: modify_value('%s') = %d\n", thread_id,
+               req->payload.escritura.key, res);
+      responder_simple(req->q_name, res);
+      break;
+    }
+
+    case OP_DELETE: {
+      int res = delete_key(req->payload.lectura.key); // Borra la clave
+      LOG_INFO("Worker %d: delete_key('%s') = %d\n", thread_id,
+               req->payload.lectura.key, res);
+      responder_simple(req->q_name, res);
+      break;
+    }
+
+    case OP_EXIST: {
+      int res = exist(req->payload.lectura.key); // Determina si la clave existe
+      LOG_INFO("Worker %d: exist('%s') = %d\n", thread_id,
+               req->payload.lectura.key, res);
+      responder_simple(req->q_name, res);
+      break;
+    }
+
+    default:
+      // Código de operación desconocido
+      LOG_ERR("Worker %d: op_code desconocido %d\n", thread_id, req->op_code);
+      responder_simple(req->q_name, -1);
+      break;
+    }
   }
 
   LOG_INFO("Worker %d finalizando.\n", thread_id);
@@ -210,11 +210,13 @@ void *worker_thread(void *arg) {
 }
 
 /* ========================================================================= *
- * BUCLE PRINCIPAL (MAIN)
+ * MAIN
  * ========================================================================= */
-
 int main(int argc, char **argv) {
-  // 1. Configurar cierre elegante (Graceful Shutdown)
+  (void)argc;
+  (void)argv;
+
+  // 1. Señales
   struct sigaction sa;
   sa.sa_handler = handle_sigint;
   sigemptyset(&sa.sa_mask);
@@ -225,58 +227,54 @@ int main(int argc, char **argv) {
   // 2. Limpieza preventiva (por si el servidor crasheó previamente)
   mq_unlink(SERVER_QUEUE);
 
-  // 3. Inspección del sistema para la cola
+  // 3. Cola del servidor
   long max_msgs = get_max_queue_depth();
+  struct mq_attr attr = {.mq_flags = 0,
+                         .mq_maxmsg = max_msgs,
+                         .mq_msgsize =
+                             sizeof(Peticion), // máximo posible de entrada
+                         .mq_curmsgs = 0};
 
-  struct mq_attr attr;
-  attr.mq_flags = 0;
-  attr.mq_maxmsg = max_msgs;
-  attr.mq_msgsize = sizeof(Peticion);
-  attr.mq_curmsgs = 0;
-
-  // 4. Crear la cola principal del servidor
+  // Crear la cola del servidor
   q_servidor = mq_open(SERVER_QUEUE, O_CREAT | O_RDONLY, 0666, &attr);
+
   if (q_servidor == (mqd_t)-1) {
     perror("Error al crear la cola del servidor");
     exit(EXIT_FAILURE);
   }
+  LOG_INFO("Cola servidor creada: %s (maxmsg=%ld, msgsize=%zu)\n", SERVER_QUEUE,
+           max_msgs, sizeof(Peticion));
 
-  LOG_INFO("Cola del servidor creada: %s (Max msgs: %ld, Size: %ld bytes)\n",
-           SERVER_QUEUE, attr.mq_maxmsg, attr.mq_msgsize);
+  // 4. Inicializar tabla de datos
+  if (destroy() == -1)
+    LOG_ERR("Fallo al inicializar la estructura de datos.\n");
 
-  // Inicializar el servicio subyacente de la API de forma centralizada
-  if (destroy() == -1) {
-    LOG_ERR("Fallo al inicializar la estructura de datos interna.\n");
-  }
-
-  // 5. Inspección del sistema para hilos (Symmetric Thread Pool)
-  long num_cores = sysconf(_SC_NPROCESSORS_ONLN);
+  // 5. Symmetric Thread pool
+  long num_cores =
+      sysconf(_SC_NPROCESSORS_ONLN); // Inspecta núcleos disponibles
   if (num_cores < 1)
-    num_cores = 4; // Fallback razonable
+    // Fallback a 4 si no se pudo determinar el número de núcleos
+    num_cores = 4;
+  LOG_INFO("Iniciando %ld workers...\n", num_cores);
 
-  LOG_INFO("Detectados %ld núcleos CPU. Iniciando Thread Pool...\n", num_cores);
-
+  // Crear un pool de hilos igual al número de núcleos disponibles
   pthread_t workers[num_cores];
   for (int i = 0; i < num_cores; i++) {
-    int *thread_id = malloc(sizeof(int));
-    *thread_id = i + 1;
-    if (pthread_create(&workers[i], NULL, worker_thread, thread_id) != 0) {
+    int *id = malloc(sizeof(int));
+    *id = i + 1;
+    if (pthread_create(&workers[i], NULL, worker_thread, id) != 0)
       perror("Error al crear hilo trabajador");
-    }
   }
 
-  LOG_INFO(
-      "Servidor listo y escuchando peticiones (Pulsa Ctrl+C para apagar)\n");
+  LOG_INFO("Servidor listo (Ctrl+C para apagar)\n");
 
-  // 6. El hilo principal duerme, despertará solo con la señal SIGINT
-  while (server_running) {
+  while (server_running)
+    // El proceso principal solo espera señales para apagar el servidor
     pause();
-  }
 
-  // Esperar a que los hilos terminen limpiamente tras el SIGINT
-  for (int i = 0; i < num_cores; i++) {
+  // Esperar a que los workers terminen
+  for (int i = 0; i < num_cores; i++)
     pthread_join(workers[i], NULL);
-  }
 
   return 0;
 }
