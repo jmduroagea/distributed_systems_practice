@@ -23,19 +23,19 @@
 /* ========================================================================= *
  * CONSTANTES ARQUITECTÓNICAS Y LÍMITES DEL SISTEMA
  * ========================================================================= */
-#define INITIAL_CAPACITY 1048576 
+#define INITIAL_CAPACITY 4096
 #define HOPSCOTCH_NEIGHBORHOOD 64
-#define NUM_SEGMENTS 1024
-#define STASH_SIZE 64
-#define LOAD_FACTOR_THRESHOLD 0.85f
+#define NUM_SEGMENTS 4096
+#define STASH_SIZE 1024
+#define LOAD_FACTOR_THRESHOLD 0.9f
 
 // Límites definidos por la especificación de la API
-#define MAX_STR_LEN 255  // [cite: 8, 10]
-#define MAX_FLOATS 32    // [cite: 13]
+#define MAX_STR_LEN 255 
+#define MAX_FLOATS 32    
 
 // Constantes del Subsistema de Hazard Pointers
 #define HP_MAX_THREADS 128      
-#define HP_RETIRE_THRESHOLD 64  
+#define HP_RETIRE_THRESHOLD 256  
 
 /* ========================================================================= *
  * ESTRUCTURAS DE DATOS
@@ -43,11 +43,11 @@
 
 // El "Fat Tuple" que contiene los datos pesados
 struct Tuple {
-    char key[MAX_STR_LEN + 1];    // [cite: 8]
-    char value1[MAX_STR_LEN + 1]; // [cite: 10]
-    int N_value2;                 // [cite: 12, 13]
-    float V_value2[MAX_FLOATS];   // [cite: 11]
-    struct Paquete value3;        // [cite: 14]
+    char key[MAX_STR_LEN + 1];    
+    char value1[MAX_STR_LEN + 1]; 
+    int N_value2;                 
+    float V_value2[MAX_FLOATS];   
+    struct Paquete value3;        
 };
 
 // El "Skinny Entry" alineado para la caché. 
@@ -297,7 +297,7 @@ void* background_free(void* arg) {
 
 int destroy(void) { 
     struct ConcurrentHashTable *new_table = calloc(1, sizeof(struct ConcurrentHashTable));
-    if (!new_table) return -1; // [cite: 23]
+    if (!new_table) return -1; 
     
     new_table->capacity = INITIAL_CAPACITY;
     new_table->entries = calloc(new_table->capacity, sizeof(struct HashEntry));
@@ -314,13 +314,13 @@ int destroy(void) {
         pthread_create(&cleanup_thread, NULL, background_free, old_table);
         pthread_detach(cleanup_thread);
     }
-    return 0; // [cite: 23]
-}
+    return 0; 
+
 
 int set_value(char *key, char *value1, int N_value2, float *V_value2, struct Paquete value3) { 
     if (!atomic_load(&servicio_iniciado) || key == NULL || value1 == NULL || V_value2 == NULL) return -1;
-    if (N_value2 < 1 || N_value2 > 32) return -1; // [cite: 31]
-    if (strlen(key) > MAX_STR_LEN || strlen(value1) > MAX_STR_LEN) return -1; // [cite: 8, 10]
+    if (N_value2 < 1 || N_value2 > 32) return -1; 
+    if (strlen(key) > MAX_STR_LEN || strlen(value1) > MAX_STR_LEN) return -1; 
 
     struct Tuple *new_tuple = malloc(sizeof(struct Tuple));
     if (!new_tuple) return -1;
@@ -344,7 +344,7 @@ int set_value(char *key, char *value1, int N_value2, float *V_value2, struct Paq
         write_unlock(&global_table->segment_locks[seg_idx]);
         pthread_rwlock_unlock(&global_stw_rwlock);
         free(new_tuple);
-        return -1; // Error al insertar clave que ya existe [cite: 31]
+        return -1; // Error al insertar clave que ya existe
     }
 
     bool inserted = false;
@@ -391,7 +391,7 @@ int set_value(char *key, char *value1, int N_value2, float *V_value2, struct Paq
         trigger_parallel_resize();
     }
 
-    return 0; // Inserción exitosa [cite: 30]
+    return 0; // Inserción exitosa 
 }
 
 int get_value(char *key, char *value1, int *N_value2, float *V_value2, struct Paquete *value3) { 
@@ -428,10 +428,10 @@ int get_value(char *key, char *value1, int *N_value2, float *V_value2, struct Pa
                         }
                         
                         if (strcmp(t->key, key) == 0) {
-                            strcpy(value1, t->value1); // [cite: 34]
-                            *N_value2 = t->N_value2;   // [cite: 35]
-                            memcpy(V_value2, t->V_value2, t->N_value2 * sizeof(float)); // [cite: 35]
-                            *value3 = t->value3;       // [cite: 36]
+                            strcpy(value1, t->value1); 
+                            *N_value2 = t->N_value2;   
+                            memcpy(V_value2, t->V_value2, t->N_value2 * sizeof(float)); 
+                            *value3 = t->value3;       
                             found = true;
                             hp_clear();
                             break;
@@ -460,12 +460,12 @@ int get_value(char *key, char *value1, int *N_value2, float *V_value2, struct Pa
     }
 
     pthread_rwlock_unlock(&global_stw_rwlock);
-    return found ? 0 : -1; // [cite: 37]
+    return found ? 0 : -1; 
 }
 
 int modify_value(char *key, char *value1, int N_value2, float *V_value2, struct Paquete value3) { 
     if (!atomic_load(&servicio_iniciado) || key == NULL || value1 == NULL || V_value2 == NULL) return -1;
-    if (N_value2 < 1 || N_value2 > 32) return -1; // [cite: 41]
+    if (N_value2 < 1 || N_value2 > 32) return -1; 
     if (strlen(value1) > MAX_STR_LEN) return -1;
 
     uint64_t full_hash = hash_function(key);
@@ -515,7 +515,7 @@ int modify_value(char *key, char *value1, int N_value2, float *V_value2, struct 
     }
 
     pthread_rwlock_unlock(&global_stw_rwlock);
-    return modified ? 0 : -1; // [cite: 40]
+    return modified ? 0 : -1; 
 }
 
 int delete_key(char *key) { 
@@ -575,11 +575,11 @@ int delete_key(char *key) {
     }
 
     pthread_rwlock_unlock(&global_stw_rwlock);
-    return deleted ? 0 : -1; // [cite: 43, 44]
+    return deleted ? 0 : -1; 
 }
 
 int exist(char *key) { 
-    if (!atomic_load(&servicio_iniciado) || key == NULL) return -1; // [cite: 46]
+    if (!atomic_load(&servicio_iniciado) || key == NULL) return -1; 
 
     uint64_t full_hash = hash_function(key);
     uint32_t short_hash = (uint32_t)full_hash;
@@ -633,5 +633,5 @@ int exist(char *key) {
     }
 
     pthread_rwlock_unlock(&global_stw_rwlock);
-    return found ? 1 : 0; // [cite: 46]
+    return found ? 1 : 0; 
 }
