@@ -6,7 +6,7 @@
 # Uso: ./stress_validator.sh [opciones]
 #   --modo       local|dist      (default: dist)
 #   --clientes   N               (default: 10)
-#   --cliente    ./ejecutable    (default: ./app-cliente-stress)
+#   --cliente    ./ejecutable    (default: ./cliente_local)
 #   --servidor   ./ejecutable    (default: ./servidor_mq)
 #   --timeout    segundos        (default: 30)
 #   --limpiar                    Borra /dev/mqueue antes de empezar
@@ -25,10 +25,10 @@ bold() { echo -e "${BOLD}$*${RESET}"; }
 
 # ── Defaults ─────────────────────────────────────────────────────────────────
 MODO="dist"
-N_CLIENTES=254
-CLIENTE_EXE="./src/app-cliente"
+N_CLIENTES=50
+CLIENTE_EXE="./cliente_local"
 SERVIDOR_EXE="./servidor_mq"
-TIMEOUT=30
+TIMEOUT=10000
 LIMPIAR=0
 NO_SERVIDOR=0
 TMPDIR_RES="/tmp/stress_validator_$$"

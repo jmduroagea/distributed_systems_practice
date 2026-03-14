@@ -16,7 +16,7 @@
 
 int main(int argc, char **argv) {
   
-  int N_OPS = 1000; //  Randomizar entre 100 y 500 operaciones por cliente
+  int N_OPS = 1000;
 
   // Ignorar argumentos de línea de comandos para este programa
   int id = argc > 1 ? atoi(argv[1]) : 0;

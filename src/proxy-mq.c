@@ -59,7 +59,7 @@ static int init_proxy() {
   // Crear la cola del cliente con atributos adecuados
   struct mq_attr attr_get = {
       .mq_flags = 0,
-      .mq_maxmsg = 10,
+      .mq_maxmsg = 1,
       .mq_msgsize = RESPUESTA_MAX_SIZE, // solo el tamaño máximo real
       .mq_curmsgs = 0};
 

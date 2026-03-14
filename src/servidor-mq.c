@@ -230,9 +230,8 @@ int main(int argc, char **argv) {
   mq_unlink(SERVER_QUEUE);
 
   // 3. Cola del servidor
-  long max_msgs = get_max_queue_depth();
   struct mq_attr attr = {.mq_flags = 0,
-                         .mq_maxmsg = max_msgs,
+                         .mq_maxmsg = 1,
                          .mq_msgsize =
                              sizeof(Peticion), // máximo posible de entrada
                          .mq_curmsgs = 0};
