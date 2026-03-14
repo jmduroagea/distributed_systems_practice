@@ -15,15 +15,16 @@
 #include <stdlib.h>
 #include <string.h>
 #include <unistd.h>
+#include <errno.h>
+#include <time.h>
+#include <dirent.h>
 
 // =========================================================
 // ESTADO GLOBAL DEL PROXY (Inicializado una vez por cliente)
 // =========================================================
 static mqd_t server_queue = (mqd_t)-1;
-static mqd_t client_queue_simple = (mqd_t)-1;
-static mqd_t client_queue_get = (mqd_t)-1;
-static char client_queue_name_get[64];
-static char client_queue_name_simple[64];
+static mqd_t client_queue = (mqd_t)-1;
+static char client_queue_name[64];
 static int proxy_ready = 0;
 
 // =========================================================
@@ -31,15 +32,10 @@ static int proxy_ready = 0;
 // =========================================================
 static void cleanup() {
   // Cerrar y eliminar colas de mensajes si están abiertas
-  if (client_queue_simple != (mqd_t)-1) {
-    mq_close(client_queue_simple);
-    mq_unlink(client_queue_name_simple);
-    client_queue_simple = (mqd_t)-1;
-  }
-  if (client_queue_get != (mqd_t)-1) {
-    mq_close(client_queue_get);
-    mq_unlink(client_queue_name_get);
-    client_queue_get = (mqd_t)-1;
+  if (client_queue != (mqd_t)-1) {
+    mq_close(client_queue);
+    mq_unlink(client_queue_name);
+    client_queue = (mqd_t)-1;
   }
   if (server_queue != (mqd_t)-1) {
     mq_close(server_queue);
@@ -57,10 +53,8 @@ static int init_proxy() {
 
   atexit(cleanup); // Registrar función de limpieza al salir
 
-  snprintf(client_queue_name_simple, sizeof(client_queue_name_simple),
-           "/cqs_%d", getpid());
-  snprintf(client_queue_name_get, sizeof(client_queue_name_get), "/cqg_%d",
-           getpid());
+  snprintf(client_queue_name, sizeof(client_queue_name),
+           "/cq_%d", getpid());
 
   // Crear la cola del cliente con atributos adecuados
   struct mq_attr attr_get = {
@@ -69,25 +63,27 @@ static int init_proxy() {
       .mq_msgsize = RESPUESTA_MAX_SIZE, // solo el tamaño máximo real
       .mq_curmsgs = 0};
 
-  struct mq_attr attr_simple = {
-      .mq_flags = 0,
-      .mq_maxmsg = 10,
-      .mq_msgsize = sizeof(RespSimple), // solo el tamaño máximo real
-      .mq_curmsgs = 0};
-
-  // Crear la cola del cliente simple
-  client_queue_simple =
-      mq_open(client_queue_name_simple, O_CREAT | O_RDONLY, 0666, &attr_simple);
-  if (client_queue_simple == (mqd_t)-1) {
-    perror("init_proxy: mq_open cliente");
-    return -2;
+  // Crear la cola del cliente
+  int tries = 0;
+  // Intentar abrir la cola del cliente, con reintentos en caso de EMFILE/ENFILE
+  while (tries < 10) {
+    client_queue = mq_open(client_queue_name, O_CREAT | O_RDONLY, 0666, &attr_get);
+    if (client_queue != (mqd_t)-1)
+      break; // Éxito
+    if (errno == EMFILE || errno == ENFILE) {
+      // Demasiados archivos abiertos, esperar un poco y reintentar
+      srand(time(0) ^ getpid());
+      usleep(rand() % 1000000); // Jitter sleep entre 0 y 1 segundo
+      tries++;
+    } else {
+      perror("init_proxy: mq_open cliente");
+      return -2;
+    }
   }
 
-  // Crear la cola del cliente get
-  client_queue_get =
-      mq_open(client_queue_name_get, O_CREAT | O_RDONLY, 0666, &attr_get);
-  if (client_queue_get == (mqd_t)-1) {
-    perror("init_proxy: mq_open cliente get");
+  if(tries == 5) {
+    fprintf(stderr, "[%ld] Fallo en intento %d: errno=%d\n", 
+        time(NULL), tries, errno);
     return -2;
   }
 
@@ -95,12 +91,9 @@ static int init_proxy() {
   server_queue = mq_open(SERVER_QUEUE, O_WRONLY);
   if (server_queue == (mqd_t)-1) {
     perror("init_proxy: mq_open servidor");
-    mq_close(client_queue_simple);
-    mq_unlink(client_queue_name_simple);
-    mq_close(client_queue_get);
-    mq_unlink(client_queue_name_get);
-    client_queue_simple = (mqd_t)-1;
-    client_queue_get = (mqd_t)-1;
+    mq_close(client_queue);
+    mq_unlink(client_queue_name);
+    client_queue = (mqd_t)-1;
     return -2;
   }
 
@@ -128,31 +121,19 @@ static int enviar_y_recibir(Peticion *p, void *recv_buf, size_t recv_size) {
     return -2;
   }
 
-  // Esperar por la respuesta en la cola del cliente correspondiente
-  if (p->op_code == OP_GET) {
-    if (mq_receive(client_queue_get, (char *)recv_buf, RESPUESTA_MAX_SIZE,
+  // Esperar por la respuesta en la cola del cliente
+  if (mq_receive(client_queue, (char *)recv_buf, RESPUESTA_MAX_SIZE,
                    NULL) == -1) {
       perror("enviar_y_recibir: mq_receive_get");
       return -2;
     }
-  } else {
-    if (mq_receive(client_queue_simple, (char *)recv_buf, sizeof(RespSimple),
-                   NULL) == -1) {
-      perror("enviar_y_recibir: mq_receive_simple");
-      return -2;
-    }
-  }
 
   return 0;
 }
 
 // Macro para rellenar el q_name sin llamar a strncpy cada vez
 #define SET_QNAME(p)                                                           \
-  strncpy((p)->q_name,                                                         \
-          ((p)->op_code == OP_GET) ? client_queue_name_get                     \
-                                   : client_queue_name_simple,                 \
-          MAX_QUEUE_NAME - 1);                                                 \
-  (p)->q_name[MAX_QUEUE_NAME - 1] = '\0'
+  memcpy((p)->q_name, client_queue_name, sizeof(client_queue_name))
 
 // =========================================================
 // API ENDPOINTS (Implementación de las funciones públicas)

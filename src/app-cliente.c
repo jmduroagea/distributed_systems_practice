@@ -13,18 +13,20 @@
 #include <stdio.h>
 #include <stdlib.h>
 
-#define N_OPS 10000 // 10 clientes x 100 = 1000 peticiones
 
 int main(int argc, char **argv) {
+  
+  int N_OPS = 1000; //  Randomizar entre 100 y 500 operaciones por cliente
+
   // Ignorar argumentos de línea de comandos para este programa
   int id = argc > 1 ? atoi(argv[1]) : 0;
   printf("[C%d] Iniciando stress test (%d operaciones)...\n", id, N_OPS);
 
-// Solo inicializar en modo local (sin servidor).
-// En modo distribuido el servidor ya llama a destroy() al arrancar.
-#ifdef MODO_LOCAL
-  destroy();
-#endif
+  // Solo inicializar en modo local (sin servidor).
+  // En modo distribuido el servidor ya llama a destroy() al arrancar.
+  #ifdef MODO_LOCAL
+    destroy();
+  #endif
 
   // Variables para medir resultadoss
   int ok = 0, err = 0;

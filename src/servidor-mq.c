@@ -66,25 +66,34 @@ long get_max_queue_depth() {
   return max_msg;
 }
 
-// Envía RespSimple (4 bytes) — para destroy, set, modify, delete, exist
-static void responder_simple(const char *q_name, int result) {
-  mqd_t q = mq_open(q_name, O_WRONLY);
-  if (q == (mqd_t)-1) {
-    perror(q_name); // <-- temporal
-    return;
-  }
-  RespSimple r = {.result = result};
-
+int send_response(mqd_t q, const void *response, size_t response_size) {
   struct timespec timeout;
   clock_gettime(CLOCK_REALTIME, &timeout);
-  timeout.tv_nsec += 50000000;
+  timeout.tv_nsec += 50000000; // 50ms timeout
   if (timeout.tv_nsec >= 1000000000) {
     timeout.tv_sec++;
     timeout.tv_nsec -= 1000000000;
   }
 
-  if (mq_timedsend(q, (const char *)&r, sizeof(RespSimple), 0, &timeout) == -1)
-    LOG_ERR("mq_timedsend RespSimple a %s falló.\n", q_name);
+  if (mq_timedsend(q, (const char *)response, response_size, 0, &timeout) ==
+      -1) {
+    perror("send_response: mq_timedsend");
+    return -1;
+  }
+  return 0;
+}
+
+// Envía RespSimple (4 bytes) — para destroy, set, modify, delete, exist
+static void responder_simple(const char *q_name, int result) {
+  mqd_t q = mq_open(q_name, O_WRONLY);
+  if (q == (mqd_t)-1) {
+    LOG_ERR("Cola cliente %s no existe.\n", q_name);
+    return;
+  }
+  RespSimple r = {.result = result};
+
+  if (send_response(q, &r, sizeof(r)) == -1)
+    LOG_ERR("Failed to send RespSimple to %s\n", q_name);
 
   mq_close(q);
 }
@@ -96,16 +105,9 @@ static void responder_get(const char *q_name, RespGet *r) {
     LOG_ERR("Cola cliente %s no existe.\n", q_name);
     return;
   }
-  struct timespec timeout;
-  clock_gettime(CLOCK_REALTIME, &timeout);
-  timeout.tv_nsec += 50000000;
-  if (timeout.tv_nsec >= 1000000000) {
-    timeout.tv_sec++;
-    timeout.tv_nsec -= 1000000000;
-  }
 
-  if (mq_timedsend(q, (const char *)r, sizeof(RespGet), 0, &timeout) == -1)
-    LOG_ERR("mq_timedsend RespGet a %s falló.\n", q_name);
+  if (send_response(q, r, sizeof(RespGet)) == -1)
+    LOG_ERR("Failed to send RespGet to %s\n", q_name);
 
   mq_close(q);
 }

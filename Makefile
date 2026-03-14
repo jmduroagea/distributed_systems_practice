@@ -10,8 +10,9 @@ all: libclaves.so libproxyclaves.so servidor_mq cliente_local cliente_dist
 # ── Librerías ─────────────────────────────────
 libclaves.so: src/claves.c xxhash/xxhash.c
 	$(CC) $(CFLAGS) -fPIC -c xxhash/xxhash.c -o xxhash.o
+	$(CC) $(CFLAGS) -fPIC -c src/hash-table.c -o hash-table.o
 	$(CC) $(CFLAGS) -fPIC -c src/claves.c -o claves.o
-	$(CC) -shared -o $@ claves.o xxhash.o
+	$(CC) -shared -o $@ claves.o xxhash.o hash-table.o
 
 libproxyclaves.so: src/proxy-mq.c
 	$(CC) $(CFLAGS) -fPIC -c src/proxy-mq.c -o proxy.o
