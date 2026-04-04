@@ -8,8 +8,8 @@
  *datos).
  **/
 
-#include "../include/claves.h"
-#include "../include/mensajes.h"
+#include "../../include/claves.h"
+#include "../../include/mensajes.h"
 #include <mqueue.h>
 #include <stdio.h>
 #include <stdlib.h>

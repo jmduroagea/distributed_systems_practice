@@ -8,18 +8,18 @@ RPATH  = -Wl,-rpath='$$ORIGIN'
 all: libclaves.so libproxyclaves.so servidor_mq cliente_local cliente_dist
 
 # ── Librerías ─────────────────────────────────
-libclaves.so: src/claves.c xxhash/xxhash.c
+libclaves.so: src/utils/claves.c xxhash/xxhash.c
 	$(CC) $(CFLAGS) -fPIC -c xxhash/xxhash.c -o xxhash.o
-	$(CC) $(CFLAGS) -fPIC -c src/hash-table.c -o hash-table.o
-	$(CC) $(CFLAGS) -fPIC -c src/claves.c -o claves.o
+	$(CC) $(CFLAGS) -fPIC -c src/utils/hash-table.c -o hash-table.o
+	$(CC) $(CFLAGS) -fPIC -c src/utils/claves.c -o claves.o
 	$(CC) -shared -o $@ claves.o xxhash.o hash-table.o
 
-libproxyclaves.so: src/proxy-mq.c
-	$(CC) $(CFLAGS) -fPIC -c src/proxy-mq.c -o proxy.o
+libproxyclaves.so: src/proxy/proxy-mq.c
+	$(CC) $(CFLAGS) -fPIC -c src/proxy/proxy-mq.c -o proxy.o
 	$(CC) -shared -o $@ proxy.o
 
 # ── Ejecutables ───────────────────────────────
-servidor_mq: src/servidor-mq.c libclaves.so
+servidor_mq: src/server/servidor-mq.c libclaves.so
 	$(CC) $(CFLAGS) -o $@ $< -L. -lclaves $(LIBS) $(RPATH)
 
 # cliente_local  → app-cliente.c + libclaves    (sin colas, con destroy())

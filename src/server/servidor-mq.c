@@ -15,8 +15,8 @@
 #include <time.h>
 #include <unistd.h>
 
-#include "../include/claves.h"
-#include "../include/mensajes.h"
+#include "../../include/claves.h"
+#include "../../include/mensajes.h"
 
 #define DEBUG_MODE 0 // Set to 1 to enable logging
 

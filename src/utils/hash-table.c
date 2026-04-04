@@ -1,7 +1,7 @@
 #define _GNU_SOURCE
 
-#include "hash-table.h"
-#include "../xxhash/xxhash.h"
+#include "../../include/hash-table.h"
+#include "../../xxhash/xxhash.h"
 #include <pthread.h>
 #include <stdalign.h>
 #include <stdatomic.h>
