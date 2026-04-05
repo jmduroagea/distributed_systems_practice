@@ -87,20 +87,20 @@ Response: | result (1B) |
 
 #### set_value — `0x02`
 ```
-Request:  | opcode (1B) | len_key (4B) | key | len_v1 (4B) | v1 | len_v2 (4B) | v2 | len_v3 (4B) | v3 |
+Request:  | opcode (1B) | len_key (4B) | key | len_v1 (4B) | v1 | N_v2 (4B) | v2 (N_v2 * 4B) | v3_x (4B) | v3_y (4B) | v3_z (4B) |
 Response: | result (1B) |
 ```
 
 #### get_value — `0x03`
 ```
 Request:  | opcode (1B) | len_key (4B) | key |
-Response: | result (1B) | len_v1 (4B) | v1 | len_v2 (4B) | v2 | len_v3 (4B) | v3 |
+Response: | result (1B) | len_v1 (4B) | v1 | N_v2 (4B) | v2 (N_v2 * 4B) | v3_x (4B) | v3_y (4B) | v3_z (4B) |
           (if result != 0, nothing follows)
 ```
 
 #### modify_value — `0x04`
 ```
-Request:  | opcode (1B) | len_key (4B) | key | len_v1 (4B) | v1 | len_v2 (4B) | v2 | len_v3 (4B) | v3 |
+Request:  | opcode (1B) | len_key (4B) | key | len_v1 (4B) | v1 | N_v2 (4B) | v2 (N_v2 * 4B) | v3_x (4B) | v3_y (4B) | v3_z (4B) |
 Response: | result (1B) |
 ```
 

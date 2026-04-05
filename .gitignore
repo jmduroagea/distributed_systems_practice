@@ -7,6 +7,8 @@ servidor
 cliente_local
 cliente_dist
 servidor-mq
+cliente_sock
+servidor_mq
 
 # Archivos de sistema y editores
 .DS_Store
