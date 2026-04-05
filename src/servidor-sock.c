@@ -41,6 +41,59 @@ static int server_running = 1;
 
 // ====================== HELPERS ======================
 
+// ------- WORK QUEUE -------
+
+#define QUEUE_SIZE 256
+
+typedef struct {
+  int fds[QUEUE_SIZE]; // Circular buffer of client file descriptors
+  int head;
+  int tail;
+  int count;
+  pthread_mutex_t lock;
+  pthread_cond_t not_empty;
+  pthread_cond_t not_full;
+} WorkQueue;
+
+static WorkQueue wq = {
+    // Initialize work queue
+    .head = 0,
+    .tail = 0,
+    .count = 0,
+    .lock = PTHREAD_MUTEX_INITIALIZER,
+    .not_empty = PTHREAD_COND_INITIALIZER,
+    .not_full = PTHREAD_COND_INITIALIZER,
+};
+
+static void wq_push(int fd) {
+  // Add a client fd to the work queue
+  pthread_mutex_lock(&wq.lock);
+  while (wq.count == QUEUE_SIZE)
+    pthread_cond_wait(&wq.not_full, &wq.lock); // Wait if queue is full
+  wq.fds[wq.tail] = fd;
+  wq.tail = (wq.tail + 1) % QUEUE_SIZE; // Circular increment
+  wq.count++;
+
+  // Signal that a new client is available
+  pthread_cond_signal(&wq.not_empty);
+  pthread_mutex_unlock(&wq.lock);
+}
+
+static int wq_pop(void) {
+  // Remove and return a client fd from the work queue
+  pthread_mutex_lock(&wq.lock);
+  while (wq.count == 0)
+    pthread_cond_wait(&wq.not_empty, &wq.lock);
+  int fd = wq.fds[wq.head];             // Get client fd at head of queue
+  wq.head = (wq.head + 1) % QUEUE_SIZE; // Circular increment
+  wq.count--;                           // Decrease count of items in queue
+
+  // Signal that space is available in the queue
+  pthread_cond_signal(&wq.not_full);
+  pthread_mutex_unlock(&wq.lock);
+  return fd;
+}
+
 static int recv_all(int fd, void *buf, size_t len) {
   // Receive exactly 'len' bytes into 'buf', handling partial reads.
   size_t total = 0;
@@ -78,165 +131,168 @@ static int recv_field(int fd, char *buffer) {
 void *worker_thread(void *arg) {
 
   // ----- INITIALIZATION -----
-  int client_fd = *(int *)arg;
+  int id = *(int *)arg;
   free(arg);
-  LOG_INFO("Worker %d iniciado.\n", client_fd);
+  LOG_INFO("Worker %d iniciado.\n", id);
 
-  // ----- TIMEOUT -----
-  struct timeval tv = {30, 0};
-  setsockopt(client_fd, SOL_SOCKET, SO_RCVTIMEO, &tv, sizeof(tv));
-
-  // ----- RECEIVE REQUESTS -----
   while (server_running) {
+    int client_fd = wq_pop();
+    if (client_fd < 0)
+      break;
+
+    // ----- TIMEOUT -----
+    struct timeval tv = {30, 0};
+    setsockopt(client_fd, SOL_SOCKET, SO_RCVTIMEO, &tv, sizeof(tv));
+
+    // ----- RECEIVE REQUESTS -----
+
     uint8_t op_code; // Read operation code
-    int n = recv(
-        client_fd, &op_code, 1,
-        0); // This will block until a request is received or timeout occurs
-    if (n <= 0)
-      break;
+    int n;
+    while ((n = recv(client_fd, &op_code, 1, 0)) > 0) {
+      switch (op_code) {
 
-    switch (op_code) {
+      case OP_DESTROY: { // 0x01
+        // ----- PROCESS REQUEST -----
+        int8_t res = (int8_t)destroy();
+        LOG_INFO("Worker %d: destroy() = %d\n", id, res);
 
-    case OP_DESTROY: { // 0x01
-      // ----- PROCESS REQUEST -----
-      int8_t res = (int8_t)destroy();
-      LOG_INFO("Worker %d: destroy() = %d\n", client_fd, res);
-
-      // ----- SEND RESPONSE -----
-      send(client_fd, &res, 1, 0);
-      break;
-    }
-
-    case OP_SET_VALUE:
-    case OP_MODIFY_VALUE: { // 0x02 or 0x04
-      // ----- RECEIVE REQUEST FIELDS -----
-      char key[MAX_KEY_LEN];
-      char value1[MAX_VAL1_LEN];
-      int N_value2;
-      float V_value2[MAX_VEC_LEN];
-      struct Paquete value3;
-
-      // Read key and value1
-      if (recv_field(client_fd, key) < 0)
-        goto disconnect;
-      if (recv_field(client_fd, value1) < 0)
-        goto disconnect;
-
-      // Read value2 array
-      uint32_t n_net;
-      if (recv_all(client_fd, &n_net, 4) < 0)
-        goto disconnect;
-      N_value2 = (int)ntohl(n_net);
-
-      if (recv_all(client_fd, V_value2, N_value2 * sizeof(float)) < 0)
-        goto disconnect;
-
-      // Read value3 struct
-      int32_t x, y, z;
-      if (recv_all(client_fd, &x, 4) < 0)
-        goto disconnect;
-      if (recv_all(client_fd, &y, 4) < 0)
-        goto disconnect;
-      if (recv_all(client_fd, &z, 4) < 0)
-        goto disconnect;
-      value3.x = (int)ntohl(x);
-      value3.y = (int)ntohl(y);
-      value3.z = (int)ntohl(z);
-
-      // ----- PROCESS REQUEST -----
-      int res = (op_code == OP_MODIFY_VALUE)
-                    ? modify_value(key, value1, N_value2, V_value2, value3)
-                    : set_value(key, value1, N_value2, V_value2, value3);
-
-      LOG_INFO("Worker %d: %s('%s') = %d\n", client_fd,
-               op_code == OP_MODIFY_VALUE ? "modify_value" : "set_value", key,
-               res);
-
-      // ----- SEND RESPONSE -----
-      int8_t r = (int8_t)res;
-      send(client_fd, &r, 1, 0);
-      break;
-    }
-
-    case OP_GET_VALUE: { // 0x03
-      // ----- RECEIVE REQUEST FIELDS -----
-      char key[MAX_KEY_LEN];
-      char value1[MAX_VAL1_LEN];
-      int N_value2;
-      float V_value2[MAX_VEC_LEN];
-      struct Paquete value3;
-
-      // Read key
-      if (recv_field(client_fd, key) < 0)
-        goto disconnect;
-
-      // ----- PROCESS REQUEST -----
-      int res = get_value(key, value1, &N_value2, V_value2, &value3);
-      LOG_INFO("Worker %d: get_value('%s') = %d\n", client_fd, key, res);
-
-      // ----- SEND RESPONSE -----
-      int8_t r = (int8_t)res;
-      send(client_fd, &r, 1, 0);
-
-      if (res == 0) { // Only send values if get_value was successful
-        send_field(client_fd, value1);
-
-        uint32_t n_net = htonl((uint32_t)N_value2);
-        send(client_fd, &n_net, 4, 0);
-        send(client_fd, V_value2, N_value2 * sizeof(float), 0);
-
-        int32_t x = htonl(value3.x);
-        int32_t y = htonl(value3.y);
-        int32_t z = htonl(value3.z);
-        send(client_fd, &x, 4, 0);
-        send(client_fd, &y, 4, 0);
-        send(client_fd, &z, 4, 0);
+        // ----- SEND RESPONSE -----
+        send(client_fd, &res, 1, 0);
+        break;
       }
-      break;
-    }
 
-    case OP_DELETE_KEY: { // 0x05
-      // Receive key field
-      char key[MAX_KEY_LEN];
-      if (recv_field(client_fd, key) < 0)
+      case OP_SET_VALUE:
+      case OP_MODIFY_VALUE: { // 0x02 or 0x04
+        // ----- RECEIVE REQUEST FIELDS -----
+        char key[MAX_KEY_LEN];
+        char value1[MAX_VAL1_LEN];
+        int N_value2;
+        float V_value2[MAX_VEC_LEN];
+        struct Paquete value3;
+
+        // Read key and value1
+        if (recv_field(client_fd, key) < 0)
+          goto disconnect;
+        if (recv_field(client_fd, value1) < 0)
+          goto disconnect;
+
+        // Read value2 array
+        uint32_t n_net;
+        if (recv_all(client_fd, &n_net, 4) < 0)
+          goto disconnect;
+        N_value2 = (int)ntohl(n_net);
+
+        if (recv_all(client_fd, V_value2, N_value2 * sizeof(float)) < 0)
+          goto disconnect;
+
+        // Read value3 struct
+        int32_t x, y, z;
+        if (recv_all(client_fd, &x, 4) < 0)
+          goto disconnect;
+        if (recv_all(client_fd, &y, 4) < 0)
+          goto disconnect;
+        if (recv_all(client_fd, &z, 4) < 0)
+          goto disconnect;
+        value3.x = (int)ntohl(x);
+        value3.y = (int)ntohl(y);
+        value3.z = (int)ntohl(z);
+
+        // ----- PROCESS REQUEST -----
+        int res = (op_code == OP_MODIFY_VALUE)
+                      ? modify_value(key, value1, N_value2, V_value2, value3)
+                      : set_value(key, value1, N_value2, V_value2, value3);
+
+        LOG_INFO("Worker %d: %s('%s') = %d\n", id,
+                 op_code == OP_MODIFY_VALUE ? "modify_value" : "set_value", key,
+                 res);
+
+        // ----- SEND RESPONSE -----
+        int8_t r = (int8_t)res;
+        send(client_fd, &r, 1, 0);
+        break;
+      }
+
+      case OP_GET_VALUE: { // 0x03
+        // ----- RECEIVE REQUEST FIELDS -----
+        char key[MAX_KEY_LEN];
+        char value1[MAX_VAL1_LEN];
+        int N_value2;
+        float V_value2[MAX_VEC_LEN];
+        struct Paquete value3;
+
+        // Read key
+        if (recv_field(client_fd, key) < 0)
+          goto disconnect;
+
+        // ----- PROCESS REQUEST -----
+        int res = get_value(key, value1, &N_value2, V_value2, &value3);
+        LOG_INFO("Worker %d: get_value('%s') = %d\n", id, key, res);
+
+        // ----- SEND RESPONSE -----
+        int8_t r = (int8_t)res;
+        send(client_fd, &r, 1, 0);
+
+        if (res == 0) { // Only send values if get_value was successful
+          send_field(client_fd, value1);
+
+          uint32_t n_net = htonl((uint32_t)N_value2);
+          send(client_fd, &n_net, 4, 0);
+          send(client_fd, V_value2, N_value2 * sizeof(float), 0);
+
+          int32_t x = htonl(value3.x);
+          int32_t y = htonl(value3.y);
+          int32_t z = htonl(value3.z);
+          send(client_fd, &x, 4, 0);
+          send(client_fd, &y, 4, 0);
+          send(client_fd, &z, 4, 0);
+        }
+        break;
+      }
+
+      case OP_DELETE_KEY: { // 0x05
+        // Receive key field
+        char key[MAX_KEY_LEN];
+        if (recv_field(client_fd, key) < 0)
+          goto disconnect;
+
+        // ----- PROCESS REQUEST -----
+        int res = delete_key(key);
+        LOG_INFO("Worker %d: delete_key('%s') = %d\n", id, key, res);
+
+        // ----- SEND RESPONSE -----
+        int8_t r = (int8_t)res;
+        send(client_fd, &r, 1, 0);
+        break;
+      }
+
+      case OP_EXIST: { // 0x06
+        // Receive key field
+        char key[MAX_KEY_LEN];
+        if (recv_field(client_fd, key) < 0)
+          goto disconnect;
+
+        // ----- PROCESS REQUEST -----
+        int res = exist(key);
+        LOG_INFO("Worker %d: exist('%s') = %d\n", id, key, res);
+
+        // ----- SEND RESPONSE -----
+        int8_t r = (int8_t)res;
+        send(client_fd, &r, 1, 0);
+        break;
+      }
+
+      default:
+        // Unknown opcode
+        LOG_ERR("Opcode desconocido: 0x%02x\n", op_code);
         goto disconnect;
-
-      // ----- PROCESS REQUEST -----
-      int res = delete_key(key);
-      LOG_INFO("Worker %d: delete_key('%s') = %d\n", client_fd, key, res);
-
-      // ----- SEND RESPONSE -----
-      int8_t r = (int8_t)res;
-      send(client_fd, &r, 1, 0);
-      break;
+      }
     }
 
-    case OP_EXIST: { // 0x06
-      // Receive key field
-      char key[MAX_KEY_LEN];
-      if (recv_field(client_fd, key) < 0)
-        goto disconnect;
-
-      // ----- PROCESS REQUEST -----
-      int res = exist(key);
-      LOG_INFO("Worker %d: exist('%s') = %d\n", client_fd, key, res);
-
-      // ----- SEND RESPONSE -----
-      int8_t r = (int8_t)res;
-      send(client_fd, &r, 1, 0);
-      break;
-    }
-
-    default:
-      // Unknown opcode
-      LOG_ERR("Opcode desconocido: 0x%02x\n", op_code);
-      goto disconnect;
-    }
+  disconnect:
+    close(client_fd);
+    LOG_INFO("Worker %d: cliente desconectado.\n", id);
   }
 
-disconnect:
-  close(client_fd);
-  LOG_INFO("Worker %d finalizando.\n", client_fd);
   return NULL;
 }
 
@@ -281,18 +337,29 @@ int main(int argc, char **argv) {
   destroy(); // Init hash table before accepting clients
   printf("Servidor escuchando en el puerto %d\n", port);
 
-  // ----- ACCEPT CLIENTS -----
-  while (server_running) {
-    int *client_fd = malloc(sizeof(int)); // Allocate on heap to pass to thread
-    *client_fd = accept(server_fd, NULL, NULL);
-    if (*client_fd < 0) {
-      free(client_fd);
-      continue;
-    }
+  // ----- CREATE WORKER THREADS -----
+  long num_cores = sysconf(_SC_NPROCESSORS_ONLN); // Get number of CPU cores
+  if (num_cores < 1)
+    num_cores = 4;
+  LOG_INFO("Iniciando %ld workers...\n", num_cores);
 
-    pthread_t thread;
-    pthread_create(&thread, NULL, worker_thread, client_fd);
-    pthread_detach(thread);
+  // Create a pool of worker threads that will handle client requests from the
+  // work queue
+  pthread_t workers[num_cores];
+  for (int i = 0; i < num_cores; i++) {
+    int *id = malloc(sizeof(int));
+    *id = i + 1;
+    pthread_create(&workers[i], NULL, worker_thread, id);
+  }
+
+  // ----- ACCEPT LOOP -----
+
+  // Only accepts clients and pushes their fds to the work queue
+  while (server_running) {
+    int client_fd = accept(server_fd, NULL, NULL);
+    if (client_fd < 0)
+      continue;
+    wq_push(client_fd); // Push new client
   }
 
   close(server_fd);
