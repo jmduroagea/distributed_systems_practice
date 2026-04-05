@@ -130,6 +130,7 @@ Produces:
 - `libproxyclaves.so` — proxy library
 - `servidor_mq` / `servidor` — server executables
 - `cliente-local` / `cliente-dist` — client executables
+- `cliente_sock`    — socket test client
 
 ## Running
 
@@ -142,7 +143,7 @@ Produces:
 **Exercise 2 (TCP sockets):**
 ```bash
 ./servidor 8080 &
-IP_TUPLAS=localhost PORT_TUPLAS=8080 ./cliente-dist
+IP_TUPLAS=localhost PORT_TUPLAS=8080 ./cliente_sock
 ```
 
 ## Testing
@@ -152,17 +153,20 @@ The `stress_validator.sh` script spins up a server and N concurrent clients, eac
 ```bash
 ./stress_validator.sh --modo dist --clientes 50
 ./stress_validator.sh --modo local --clientes 1
+./stress_validator.sh --modo sock --clientes 10
 ```
 
 Options:
 ```
---modo local|dist       transport layer (default: dist)
+-- modo local|dist|sock transport layer (default: dist)
 --clientes N            number of concurrent clients (default: 10)
 --cliente ./exec        client executable
 --servidor ./exec       server executable
 --timeout N             seconds before killing (default: 30)
 --limpiar               wipe /dev/mqueue before starting
 --no-servidor           skip server startup (local mode)
+--ip    address        (default: localhost)
+--port  port           (default: 8080)
 ```
 
 Operations per client are configured via `N_OPS` in `src/app-cliente.c`. Each iteration runs set → exist → get → modify → delete, so total ops = `5 × N_OPS × N_CLIENTS`.
