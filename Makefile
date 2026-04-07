@@ -62,7 +62,7 @@ cliente_sock: src/app-cliente.c libproxyclaves-sock.so
 
 # ── Stress tests ──────────────────────────────────────────────────────────────
 stress-sock: cliente_sock servidor
-	./stress_validator.sh --modo sock --clientes 10 --timeout 3000
+	./stress_validator.sh --modo sock --clientes 100 --timeout 3000
 
 stress-dist: cliente_dist servidor_mq
 	./stress_validator.sh --modo dist --cliente ./cliente_dist --limpiar

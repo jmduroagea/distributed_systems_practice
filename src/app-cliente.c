@@ -16,7 +16,7 @@
 
 int main(int argc, char **argv) {
   
-  int N_OPS = 10;
+  int N_OPS = 100;
 
   // Ignorar argumentos de línea de comandos para este programa
   int id = argc > 1 ? atoi(argv[1]) : 0;
