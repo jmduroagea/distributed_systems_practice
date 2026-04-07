@@ -1,6 +1,9 @@
 #include "../include/claves.h"
 #include <arpa/inet.h>
+#include <errno.h>         // errno, EINTR
 #include <pthread.h>
+#include <netinet/tcp.h>  // TCP_NODELAY
+#include <signal.h>    // Bug 4 fix: para sig_atomic_t y sigaction
 #include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -37,7 +40,14 @@
 #define LOG_ERR(...)
 #endif
 
-static int server_running = 1;
+// volatile sig_atomic_t garantiza visibilidad atomica desde el handler sin
+// necesidad de mutex: escritura atomica desde handler, lectura en main loop.
+static volatile sig_atomic_t server_running = 1;
+
+static void handle_signal(int sig) {
+  (void)sig;
+  server_running = 0;
+}
 
 // ====================== HELPERS ======================
 
@@ -94,33 +104,84 @@ static int wq_pop(void) {
   return fd;
 }
 
-static int recv_all(int fd, void *buf, size_t len) {
-  // Receive exactly 'len' bytes into 'buf', handling partial reads.
-  size_t total = 0;
-  char *ptr = (char *)buf;
-  while (total < len) {
-    int n = recv(fd, ptr + total, len - total, 0);
-    if (n <= 0)
-      return -1;
-    total += n;
+// ------- INCOMING BUFFER -------
+// Minimiza syscalls cacheando la lectura de manera transparente
+// 0 context switches si los datos ya llegaron en el paquete TCP actual.
+#define INBUF_SIZE 2048
+typedef struct {
+  char data[INBUF_SIZE];
+  int read_pos;
+  int write_pos;
+} InBuf;
+
+static int inb_read(int fd, InBuf *b, void *dest, size_t len) {
+  uint8_t *dst = (uint8_t *)dest;
+  size_t needed = len;
+  
+  while (needed > 0) {
+    int available = b->write_pos - b->read_pos;
+    if (available > 0) {
+      size_t chunk = ((size_t)available < needed) ? (size_t)available : needed;
+      memcpy(dst, b->data + b->read_pos, chunk);
+      b->read_pos += chunk;
+      dst += chunk;
+      needed -= chunk;
+      if (b->read_pos == b->write_pos) {
+        b->read_pos = 0;
+        b->write_pos = 0;
+      }
+    } else {
+      b->read_pos = 0;
+      b->write_pos = 0;
+      int n = recv(fd, b->data, INBUF_SIZE, 0);
+      if (n <= 0) return -1;
+      b->write_pos = n;
+    }
   }
   return 0;
 }
 
-static void send_field(int fd, const char *data) {
-  // Send a string field as: [4-byte length][data]
-  uint32_t len = htonl(strlen(data));
-  send(fd, &len, 4, 0);
-  send(fd, data, strlen(data), 0);
+// ------- OUTGOING BUFFER -------
+// Mismo patrón que en proxy-sock.c: ensamblamos la respuesta completa en
+// un buffer de stack y la enviamos con 1 sola llamada a send().
+// Tamaño máximo de respuesta GET: 1+4+255+4+32*4+4+4+4 = 404 bytes.
+#define OUTBUF_SIZE 512
+typedef struct { uint8_t d[OUTBUF_SIZE]; size_t n; } OutBuf;
+
+static inline void ob_u8(OutBuf *b, uint8_t v)     { b->d[b->n++] = v; }
+static inline void ob_u32(OutBuf *b, uint32_t v)   { v = htonl(v); memcpy(b->d+b->n,&v,4); b->n+=4; }
+static inline void ob_i32(OutBuf *b, int32_t v)    { ob_u32(b,(uint32_t)v); }
+static inline void ob_str(OutBuf *b, const char *s) {
+  size_t len = strlen(s);
+  ob_u32(b, (uint32_t)len);
+  memcpy(b->d + b->n, s, len);
+  b->n += len;
+}
+static inline void ob_floats(OutBuf *b, const float *arr, int n) {
+  for (int i = 0; i < n; i++) {
+    uint32_t bits; memcpy(&bits, &arr[i], sizeof(float)); ob_u32(b, bits);
+  }
+}
+static inline void ob_flush(int fd, const OutBuf *b) { send(fd, b->d, b->n, 0); }
+
+// Recibe N floats con byte order explícito: cachea lecturas y luego deserializa
+static int recv_floats(int fd, InBuf *b, float *arr, int n) {
+  uint32_t buf[32];
+  if (inb_read(fd, b, buf, (size_t)n * sizeof(uint32_t)) < 0) return -1;
+  for (int i = 0; i < n; i++) {
+    buf[i] = ntohl(buf[i]);
+    memcpy(&arr[i], &buf[i], sizeof(float));
+  }
+  return 0;
 }
 
-static int recv_field(int fd, char *buffer) {
+static int recv_field(int fd, InBuf *b, char *buffer) {
   // Receive a string field sent as: [4-byte length][data]
   uint32_t net_len;
-  if (recv_all(fd, &net_len, 4) < 0)
+  if (inb_read(fd, b, &net_len, 4) < 0)
     return -1;
   uint32_t len = ntohl(net_len);
-  if (recv_all(fd, buffer, len) < 0)
+  if (inb_read(fd, b, buffer, len) < 0)
     return -1;
   buffer[len] = '\0';
   return 0;
@@ -140,15 +201,20 @@ void *worker_thread(void *arg) {
     if (client_fd < 0)
       break;
 
-    // ----- TIMEOUT -----
+    // ----- SOCKET OPTIONS -----
+    // SO_RCVTIMEO: timeout de 30s por si el cliente deja de enviar
     struct timeval tv = {30, 0};
-    setsockopt(client_fd, SOL_SOCKET, SO_RCVTIMEO, &tv, sizeof(tv));
+    setsockopt(client_fd, SOL_SOCKET,  SO_RCVTIMEO, &tv,      sizeof(tv));
+    // TCP_NODELAY: misma razón que en el proxy — evita que el kernel retenga
+    // la respuesta (aunque sea 1 byte) esperando acumular más datos.
+    int nodelay = 1;
+    setsockopt(client_fd, IPPROTO_TCP, TCP_NODELAY, &nodelay, sizeof(nodelay));
 
     // ----- RECEIVE REQUESTS -----
 
+    InBuf inb = {0}; // Buffer persistente durante la conexion TCP actual
     uint8_t op_code; // Read operation code
-    int n;
-    while ((n = recv(client_fd, &op_code, 1, 0)) > 0) {
+    while (inb_read(client_fd, &inb, &op_code, 1) == 0) {
       switch (op_code) {
 
       case OP_DESTROY: { // 0x01
@@ -171,27 +237,27 @@ void *worker_thread(void *arg) {
         struct Paquete value3;
 
         // Read key and value1
-        if (recv_field(client_fd, key) < 0)
+        if (recv_field(client_fd, &inb, key) < 0)
           goto disconnect;
-        if (recv_field(client_fd, value1) < 0)
+        if (recv_field(client_fd, &inb, value1) < 0)
           goto disconnect;
 
         // Read value2 array
         uint32_t n_net;
-        if (recv_all(client_fd, &n_net, 4) < 0)
+        if (inb_read(client_fd, &inb, &n_net, 4) < 0)
           goto disconnect;
         N_value2 = (int)ntohl(n_net);
 
-        if (recv_all(client_fd, V_value2, N_value2 * sizeof(float)) < 0)
+        if (recv_floats(client_fd, &inb, V_value2, N_value2) < 0) // Bug 1 fix
           goto disconnect;
 
         // Read value3 struct
         int32_t x, y, z;
-        if (recv_all(client_fd, &x, 4) < 0)
+        if (inb_read(client_fd, &inb, &x, 4) < 0)
           goto disconnect;
-        if (recv_all(client_fd, &y, 4) < 0)
+        if (inb_read(client_fd, &inb, &y, 4) < 0)
           goto disconnect;
-        if (recv_all(client_fd, &z, 4) < 0)
+        if (inb_read(client_fd, &inb, &z, 4) < 0)
           goto disconnect;
         value3.x = (int)ntohl(x);
         value3.y = (int)ntohl(y);
@@ -221,30 +287,28 @@ void *worker_thread(void *arg) {
         struct Paquete value3;
 
         // Read key
-        if (recv_field(client_fd, key) < 0)
+        if (recv_field(client_fd, &inb, key) < 0)
           goto disconnect;
 
         // ----- PROCESS REQUEST -----
         int res = get_value(key, value1, &N_value2, V_value2, &value3);
         LOG_INFO("Worker %d: get_value('%s') = %d\n", id, key, res);
 
-        // ----- SEND RESPONSE -----
-        int8_t r = (int8_t)res;
-        send(client_fd, &r, 1, 0);
-
-        if (res == 0) { // Only send values if get_value was successful
-          send_field(client_fd, value1);
-
-          uint32_t n_net = htonl((uint32_t)N_value2);
-          send(client_fd, &n_net, 4, 0);
-          send(client_fd, V_value2, N_value2 * sizeof(float), 0);
-
-          int32_t x = htonl(value3.x);
-          int32_t y = htonl(value3.y);
-          int32_t z = htonl(value3.z);
-          send(client_fd, &x, 4, 0);
-          send(client_fd, &y, 4, 0);
-          send(client_fd, &z, 4, 0);
+        // Respuesta de get_value: ensamblada en un único buffer para garantizar
+        // 1 sola llamada a send() tanto en éxito como en error.
+        if (res == 0) {
+          OutBuf rb = {.n = 0};
+          ob_u8(&rb, 0);                          // result = éxito
+          ob_str(&rb, value1);
+          ob_u32(&rb, (uint32_t)N_value2);
+          ob_floats(&rb, V_value2, N_value2);
+          ob_i32(&rb, value3.x);
+          ob_i32(&rb, value3.y);
+          ob_i32(&rb, value3.z);
+          ob_flush(client_fd, &rb);
+        } else {
+          int8_t r = (int8_t)res;
+          send(client_fd, &r, 1, 0);
         }
         break;
       }
@@ -252,7 +316,7 @@ void *worker_thread(void *arg) {
       case OP_DELETE_KEY: { // 0x05
         // Receive key field
         char key[MAX_KEY_LEN];
-        if (recv_field(client_fd, key) < 0)
+        if (recv_field(client_fd, &inb, key) < 0)
           goto disconnect;
 
         // ----- PROCESS REQUEST -----
@@ -268,7 +332,7 @@ void *worker_thread(void *arg) {
       case OP_EXIST: { // 0x06
         // Receive key field
         char key[MAX_KEY_LEN];
-        if (recv_field(client_fd, key) < 0)
+        if (recv_field(client_fd, &inb, key) < 0)
           goto disconnect;
 
         // ----- PROCESS REQUEST -----
@@ -306,6 +370,22 @@ int main(int argc, char **argv) {
 
   int port = atoi(argv[1]);
 
+  // ----- SIGNAL HANDLERS -----
+  // SIGINT/SIGTERM: inicia shutdown limpio (server_running = 0)
+  struct sigaction sa;
+  sa.sa_handler = handle_signal;
+  sigemptyset(&sa.sa_mask);
+  sa.sa_flags = 0;
+  sigaction(SIGINT,  &sa, NULL);
+  sigaction(SIGTERM, &sa, NULL);
+  // SIGPIPE: ignorar — sin esto, si un cliente se desconecta durante send(),
+  // el proceso recibe SIGPIPE y termina silenciosamente, matando a todos los
+  // demas clientes activos. El error queda disponible como EPIPE en recv().
+  struct sigaction sa_ign = {.sa_handler = SIG_IGN};
+  sigemptyset(&sa_ign.sa_mask);
+  sa_ign.sa_flags = 0;
+  sigaction(SIGPIPE, &sa_ign, NULL);
+
   // ----- CREATE SERVER SOCKET -----
   int server_fd = socket(AF_INET, SOCK_STREAM, 0);
   if (server_fd < 0) {
@@ -329,7 +409,7 @@ int main(int argc, char **argv) {
   }
 
   // ----- LISTEN -----
-  if (listen(server_fd, 10) < 0) {
+  if (listen(server_fd, SOMAXCONN) < 0) { // SOMAXCONN: backlog maximo del sistema
     perror("listen");
     return 1;
   }
@@ -353,14 +433,24 @@ int main(int argc, char **argv) {
   }
 
   // ----- ACCEPT LOOP -----
-
-  // Only accepts clients and pushes their fds to the work queue
+  // Solo acepta conexiones y las encola: el procesamiento lo hacen los workers.
   while (server_running) {
     int client_fd = accept(server_fd, NULL, NULL);
-    if (client_fd < 0)
-      continue;
-    wq_push(client_fd); // Push new client
+    if (client_fd < 0) {
+      if (errno == EINTR) continue; // serial interrumpio accept(), recheck server_running
+      perror("accept");             // error real: EMFILE, ENOBUFS, etc.
+      break;                        // salir para evitar busy-loop al 100% CPU
+    }
+    wq_push(client_fd);
   }
+
+  // ----- GRACEFUL SHUTDOWN -----
+  // Despertar a todos los workers bloqueados en wq_pop() con un sentinel -1.
+  // Los workers ya comprueban (client_fd < 0) → break, así que salen limpiamente.
+  for (int i = 0; i < num_cores; i++)
+    wq_push(-1);
+  for (int i = 0; i < num_cores; i++)
+    pthread_join(workers[i], NULL);
 
   close(server_fd);
   return 0;

@@ -1,13 +1,31 @@
-# ─────────────────────────────────────────────
-CC     = gcc
-CFLAGS = -Wall -g -I./include -I./xxhash
-LIBS   = -lrt -lpthread
-RPATH  = -Wl,-rpath='$$ORIGIN'
+# ─────────────────────────────────────────────────────────────────────────────
+# Build configuration
+# Uso:
+#   make          → build optimizado (release, -O2)
+#   make debug    → build con símbolos de depuración (-g, -O0), hace clean primero
+#   make clean    → borra artefactos compilados
+# ─────────────────────────────────────────────────────────────────────────────
+CC         = gcc
+CFLAGS     = -Wall -O2 -flto -DNDEBUG -I./include -I./xxhash  # release por defecto
+LIBS       = -lrt -lpthread
+RPATH      = -Wl,-rpath='$$ORIGIN'
 
-# ─────────────────────────────────────────────
-all: libclaves.so libproxyclaves.so servidor_mq servidor cliente_local cliente_dist cliente_sock
+.PHONY: all release debug clean stress-sock stress-dist stress-local
 
-# ── Librerías ─────────────────────────────────
+ALL_TARGETS = libclaves.so libproxyclaves.so servidor_mq servidor \
+              cliente_local cliente_dist cliente_sock
+
+# ─────────────────────────────────────────────────────────────────────────────
+all: release
+
+release: $(ALL_TARGETS)
+
+# debug limpia primero para garantizar que todo se recompila con -g/-O0.
+# Para volver a release: make clean && make
+debug: CFLAGS = -Wall -g -O0 -I./include -I./xxhash
+debug: clean $(ALL_TARGETS)
+
+# ── Librerías ─────────────────────────────────────────────────────────────────
 libclaves.so: src/utils/claves.c xxhash/xxhash.c
 	$(CC) $(CFLAGS) -fPIC -c xxhash/xxhash.c -o xxhash.o
 	$(CC) $(CFLAGS) -fPIC -c src/utils/hash-table.c -o hash-table.o
@@ -24,7 +42,7 @@ libproxyclaves-sock.so: src/proxy-sock.c
 	$(CC) $(CFLAGS) -fPIC -c src/proxy-sock.c -o proxy-sock.o
 	$(CC) -shared -o $@ proxy-sock.o
 
-# ── Ejecutables ───────────────────────────────
+# ── Ejecutables ───────────────────────────────────────────────────────────────
 servidor_mq: src/server/servidor-mq.c libclaves.so
 	$(CC) $(CFLAGS) -o $@ $< -L. -lclaves $(LIBS) $(RPATH)
 
@@ -42,7 +60,7 @@ cliente_dist: src/app-cliente.c libproxyclaves.so
 cliente_sock: src/app-cliente.c libproxyclaves-sock.so
 	$(CC) $(CFLAGS) -o $@ $< -L. -lproxyclaves-sock $(LIBS) $(RPATH)
 
-# ── Stress tests ──────────────────────────────
+# ── Stress tests ──────────────────────────────────────────────────────────────
 stress-sock: cliente_sock servidor
 	./stress_validator.sh --modo sock --clientes 10 --timeout 3000
 
@@ -52,6 +70,6 @@ stress-dist: cliente_dist servidor_mq
 stress-local: cliente_local
 	./stress_validator.sh --modo local --no-servidor --cliente ./cliente_local
 
-# ── Limpieza ──────────────────────────────────
+# ── Limpieza ──────────────────────────────────────────────────────────────────
 clean:
 	rm -f *.o *.so servidor_mq servidor cliente_local cliente_dist cliente_sock
