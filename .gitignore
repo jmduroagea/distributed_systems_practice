@@ -9,6 +9,8 @@ cliente_dist
 servidor-mq
 cliente_sock
 servidor_mq
+clavesRPC_server
+cliente_rpc
 
 # Archivos de sistema y editores
 .DS_Store

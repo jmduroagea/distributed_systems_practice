@@ -9,11 +9,14 @@ CC         = gcc
 CFLAGS     = -Wall -O2 -flto -DNDEBUG -I./include -I./xxhash  # release por defecto
 LIBS       = -lrt -lpthread
 RPATH      = -Wl,-rpath='$$ORIGIN'
+TIRPC_CFLAGS = -I/usr/include/tirpc
+TIRPC_LIBS   = -ltirpc
 
 .PHONY: all release debug clean stress-sock stress-dist stress-local
 
-ALL_TARGETS = libclaves.so libproxyclaves.so servidor_mq servidor \
-              cliente_local cliente_dist cliente_sock
+ALL_TARGETS = libclaves.so libproxyclaves.so libproxyclaves-rpc.so \
+              servidor_mq servidor clavesRPC_server \
+              cliente_local cliente_dist cliente_sock cliente_rpc
 
 # ─────────────────────────────────────────────────────────────────────────────
 all: release
@@ -24,6 +27,10 @@ release: $(ALL_TARGETS)
 # Para volver a release: make clean && make
 debug: CFLAGS = -Wall -g -O0 -I./include -I./xxhash
 debug: clean $(ALL_TARGETS)
+
+# Genera RPC a partir del .x
+rpc-gen:
+	cd src/rpc && rpcgen -aNM clavesRPC.x
 
 # ── Librerías ─────────────────────────────────────────────────────────────────
 libclaves.so: src/utils/claves.c xxhash/xxhash.c
@@ -41,6 +48,13 @@ libproxyclaves.so: src/proxy/proxy-mq.c
 libproxyclaves-sock.so: src/proxy/proxy-sock.c
 	$(CC) $(CFLAGS) -fPIC -c src/proxy/proxy-sock.c -o proxy-sock.o
 	$(CC) -shared -o $@ proxy-sock.o
+
+# Ejercicio 3 - rpc
+libproxyclaves-rpc.so: src/proxy-rpc.c src/rpc/clavesRPC_clnt.c src/rpc/clavesRPC_xdr.c
+	$(CC) $(CFLAGS) $(TIRPC_CFLAGS) -I./rpc -fPIC -c src/proxy-rpc.c -o proxy-rpc.o
+	$(CC) $(CFLAGS) $(TIRPC_CFLAGS) -I./rpc -fPIC -c src/rpc/clavesRPC_clnt.c -o clavesRPC_clnt.o
+	$(CC) $(CFLAGS) $(TIRPC_CFLAGS) -I./rpc -fPIC -c src/rpc/clavesRPC_xdr.c -o clavesRPC_xdr.o
+	$(CC) -shared -o $@ proxy-rpc.o clavesRPC_clnt.o clavesRPC_xdr.o $(TIRPC_LIBS)
 
 # ── Ejecutables ───────────────────────────────────────────────────────────────
 servidor_mq: src/server/servidor-mq.c libclaves.so
@@ -60,6 +74,17 @@ cliente_dist: src/app-cliente.c libproxyclaves.so
 cliente_sock: src/app-cliente.c libproxyclaves-sock.so
 	$(CC) $(CFLAGS) -o $@ $< -L. -lproxyclaves-sock $(LIBS) $(RPATH)
 
+# Ejercicio 3 -Servidor RPC
+clavesRPC_server: src/rpc/clavesRPC_server.c src/rpc/clavesRPC_svc.c src/rpc/clavesRPC_xdr.c libclaves.so
+	$(CC) $(CFLAGS) $(TIRPC_CFLAGS) -I./rpc -c src/rpc/clavesRPC_server.c -o clavesRPC_server.o
+	$(CC) $(CFLAGS) $(TIRPC_CFLAGS) -I./rpc -c src/rpc/clavesRPC_svc.c -o clavesRPC_svc.o
+	$(CC) $(CFLAGS) $(TIRPC_CFLAGS) -I./rpc -c src/rpc/clavesRPC_xdr.c -o clavesRPC_xdr_srv.o
+	$(CC) -o $@ clavesRPC_server.o clavesRPC_svc.o clavesRPC_xdr_srv.o -L. -lclaves $(LIBS) $(TIRPC_LIBS) $(RPATH)
+
+# Cliente RPC
+cliente_rpc: src/app-cliente.c libproxyclaves-rpc.so
+	$(CC) $(CFLAGS) -o $@ $< -L. -lproxyclaves-rpc $(LIBS) $(RPATH)
+
 # ── Stress tests ──────────────────────────────────────────────────────────────
 stress-sock: cliente_sock servidor
 	./stress_validator.sh --modo sock --clientes 100 --timeout 3000
@@ -72,4 +97,5 @@ stress-local: cliente_local
 
 # ── Limpieza ──────────────────────────────────────────────────────────────────
 clean:
-	rm -f *.o *.so servidor_mq servidor cliente_local cliente_dist cliente_sock
+	rm -f *.o *.so servidor_mq servidor clavesRPC_server \
+	      cliente_local cliente_dist cliente_sock cliente_rpc
