@@ -25,7 +25,6 @@ typedef struct paquete_rpc paquete_rpc;
 struct write_args {
 	char *key;
 	char *value1;
-	int N_value2;
 	struct {
 		u_int V_value2_len;
 		float *V_value2_val;
@@ -47,7 +46,6 @@ typedef struct result_simple result_simple;
 struct result_get {
 	int result;
 	char *value1;
-	int N_value2;
 	struct {
 		u_int V_value2_len;
 		float *V_value2_val;

@@ -28,8 +28,6 @@ xdr_write_args (XDR *xdrs, write_args *objp)
 		 return FALSE;
 	 if (!xdr_string (xdrs, &objp->value1, 255))
 		 return FALSE;
-	 if (!xdr_int (xdrs, &objp->N_value2))
-		 return FALSE;
 	 if (!xdr_array (xdrs, (char **)&objp->V_value2.V_value2_val, (u_int *) &objp->V_value2.V_value2_len, 32,
 		sizeof (float), (xdrproc_t) xdr_float))
 		 return FALSE;
@@ -66,8 +64,6 @@ xdr_result_get (XDR *xdrs, result_get *objp)
 	 if (!xdr_int (xdrs, &objp->result))
 		 return FALSE;
 	 if (!xdr_string (xdrs, &objp->value1, 255))
-		 return FALSE;
-	 if (!xdr_int (xdrs, &objp->N_value2))
 		 return FALSE;
 	 if (!xdr_array (xdrs, (char **)&objp->V_value2.V_value2_val, (u_int *) &objp->V_value2.V_value2_len, 32,
 		sizeof (float), (xdrproc_t) xdr_float))

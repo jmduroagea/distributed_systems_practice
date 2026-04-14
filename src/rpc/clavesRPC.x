@@ -13,7 +13,6 @@ struct paquete_rpc {
 struct write_args {
     string key<255>;
     string value1<255>;
-    int    N_value2;
     float  V_value2<32>; /* Max 32 */
     paquete_rpc value3;
 };
@@ -34,7 +33,6 @@ struct result_simple {
 struct result_get {
     int         result;
     string      value1<255>;
-    int         N_value2;
     float       V_value2<32>;
     paquete_rpc value3;
 };
