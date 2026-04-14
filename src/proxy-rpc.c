@@ -36,6 +36,13 @@ static int init_proxy(void) {
     return 0;
 }
 
+static void force_reconnect(void) {
+    if (clnt != NULL) {
+        clnt_destroy(clnt);
+        clnt = NULL;
+    }
+}
+
 // ================ DESTROY ================               
 int destroy(void) {
     if (init_proxy() != 0) // Ensure proxy is ready
@@ -46,6 +53,7 @@ int destroy(void) {
     enum clnt_stat stat = destroy_1(&res, clnt);
     if (stat != RPC_SUCCESS) { // Check for RPC errors
         clnt_perror(clnt, "destroy_1");
+        force_reconnect();
         return -1;
     }
     return res.result; // Return the result from the RPC call
@@ -75,6 +83,7 @@ int set_value(char *key, char *value1, int N_value2, float *V_value2,
     enum clnt_stat stat = set_value_1(args, &res, clnt); // Call RPC function
     if (stat != RPC_SUCCESS) {
         clnt_perror(clnt, "set_value_1");
+        force_reconnect();
         return -1;
     }
     return res.result;
@@ -94,6 +103,7 @@ int get_value(char *key, char *value1, int *N_value2, float *V_value2,
     enum clnt_stat stat = get_value_1(args, &res, clnt); // Call the RPC function
     if (stat != RPC_SUCCESS) {
         clnt_perror(clnt, "get_value_1");
+        force_reconnect();
         return -1;
     }
 
@@ -137,6 +147,7 @@ int modify_value(char *key, char *value1, int N_value2, float *V_value2,
     enum clnt_stat stat = modify_value_1(args, &res, clnt); // Call the RPC function
     if (stat != RPC_SUCCESS) {
         clnt_perror(clnt, "modify_value_1");
+        force_reconnect();
         return -1;
     }
     return res.result;
@@ -154,6 +165,7 @@ int delete_key(char *key) {
     enum clnt_stat stat = delete_key_1(args, &res, clnt); // Call the RPC function
     if (stat != RPC_SUCCESS) {
         clnt_perror(clnt, "delete_key_1");
+        force_reconnect();
         return -1;
     }
     return res.result; // Return the result from the RPC call
@@ -171,6 +183,7 @@ int exist(char *key) {
     enum clnt_stat stat = exist_1(args, &res, clnt);
     if (stat != RPC_SUCCESS) {
         clnt_perror(clnt, "exist_1");
+        force_reconnect();
         return -1;
     }
     return res.result; // Return 1 if exists, 0 if not, or -1 on error

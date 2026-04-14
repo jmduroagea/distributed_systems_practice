@@ -12,7 +12,7 @@ RPATH      = -Wl,-rpath='$$ORIGIN'
 TIRPC_CFLAGS = -I/usr/include/tirpc
 TIRPC_LIBS   = -ltirpc
 
-.PHONY: all release debug clean stress-sock stress-dist stress-local
+.PHONY: all release debug clean stress-sock stress-dist stress-local stress-rpc rpc-gen
 
 ALL_TARGETS = libclaves.so libproxyclaves.so libproxyclaves-rpc.so \
               servidor_mq servidor clavesRPC_server \
@@ -28,12 +28,21 @@ release: $(ALL_TARGETS)
 debug: CFLAGS = -Wall -g -O0 -I./include -I./xxhash
 debug: clean $(ALL_TARGETS)
 
-# Genera RPC a partir del .x
-rpc-gen:
-	cd src/rpc && rpcgen -aNM clavesRPC.x
+# ── rpcgen ────────────────────────────────────────────────────────────────────
+RPC_X   = src/rpc/clavesRPC.x
+RPC_GEN = src/rpc/clavesRPC.h \
+          src/rpc/clavesRPC_clnt.c \
+          src/rpc/clavesRPC_svc.c \
+          src/rpc/clavesRPC_xdr.c
+
+$(RPC_GEN): $(RPC_X)
+	cd src/rpc && rpcgen -NM clavesRPC.x
+
+# Alias manual por si se quiere forzar
+rpc-gen: $(RPC_GEN)
 
 # ── Librerías ─────────────────────────────────────────────────────────────────
-libclaves.so: src/utils/claves.c xxhash/xxhash.c
+libclaves.so: src/utils/claves.c src/utils/hash-table.c xxhash/xxhash.c
 	$(CC) $(CFLAGS) -fPIC -c xxhash/xxhash.c -o xxhash.o
 	$(CC) $(CFLAGS) -fPIC -c src/utils/hash-table.c -o hash-table.o
 	$(CC) $(CFLAGS) -fPIC -c src/utils/claves.c -o claves.o
@@ -49,11 +58,11 @@ libproxyclaves-sock.so: src/proxy/proxy-sock.c
 	$(CC) $(CFLAGS) -fPIC -c src/proxy/proxy-sock.c -o proxy-sock.o
 	$(CC) -shared -o $@ proxy-sock.o
 
-# Ejercicio 3 - rpc
-libproxyclaves-rpc.so: src/proxy-rpc.c src/rpc/clavesRPC_clnt.c src/rpc/clavesRPC_xdr.c
-	$(CC) $(CFLAGS) $(TIRPC_CFLAGS) -I./rpc -fPIC -c src/proxy-rpc.c -o proxy-rpc.o
-	$(CC) $(CFLAGS) $(TIRPC_CFLAGS) -I./rpc -fPIC -c src/rpc/clavesRPC_clnt.c -o clavesRPC_clnt.o
-	$(CC) $(CFLAGS) $(TIRPC_CFLAGS) -I./rpc -fPIC -c src/rpc/clavesRPC_xdr.c -o clavesRPC_xdr.o
+# Ejercicio 3 — proxy RPC (depende de ficheros autogenerados)
+libproxyclaves-rpc.so: src/proxy-rpc.c $(RPC_GEN)
+	$(CC) $(CFLAGS) $(TIRPC_CFLAGS) -fPIC -c src/proxy-rpc.c -o proxy-rpc.o
+	$(CC) $(CFLAGS) $(TIRPC_CFLAGS) -fPIC -c src/rpc/clavesRPC_clnt.c -o clavesRPC_clnt.o
+	$(CC) $(CFLAGS) $(TIRPC_CFLAGS) -fPIC -c src/rpc/clavesRPC_xdr.c -o clavesRPC_xdr.o
 	$(CC) -shared -o $@ proxy-rpc.o clavesRPC_clnt.o clavesRPC_xdr.o $(TIRPC_LIBS)
 
 # ── Ejecutables ───────────────────────────────────────────────────────────────
@@ -74,14 +83,14 @@ cliente_dist: src/app-cliente.c libproxyclaves.so
 cliente_sock: src/app-cliente.c libproxyclaves-sock.so
 	$(CC) $(CFLAGS) -o $@ $< -L. -lproxyclaves-sock $(LIBS) $(RPATH)
 
-# Ejercicio 3 -Servidor RPC
-clavesRPC_server: src/rpc/clavesRPC_server.c src/rpc/clavesRPC_svc.c src/rpc/clavesRPC_xdr.c libclaves.so
-	$(CC) $(CFLAGS) $(TIRPC_CFLAGS) -I./rpc -c src/rpc/clavesRPC_server.c -o clavesRPC_server.o
-	$(CC) $(CFLAGS) $(TIRPC_CFLAGS) -I./rpc -c src/rpc/clavesRPC_svc.c -o clavesRPC_svc.o
-	$(CC) $(CFLAGS) $(TIRPC_CFLAGS) -I./rpc -c src/rpc/clavesRPC_xdr.c -o clavesRPC_xdr_srv.o
+# Ejercicio 3 — Servidor RPC (depende de ficheros autogenerados + libclaves)
+clavesRPC_server: src/rpc/clavesRPC_server.c $(RPC_GEN) libclaves.so
+	$(CC) $(CFLAGS) $(TIRPC_CFLAGS) -c src/rpc/clavesRPC_server.c -o clavesRPC_server.o
+	$(CC) $(CFLAGS) $(TIRPC_CFLAGS) -c src/rpc/clavesRPC_svc.c -o clavesRPC_svc.o
+	$(CC) $(CFLAGS) $(TIRPC_CFLAGS) -c src/rpc/clavesRPC_xdr.c -o clavesRPC_xdr_srv.o
 	$(CC) -o $@ clavesRPC_server.o clavesRPC_svc.o clavesRPC_xdr_srv.o -L. -lclaves $(LIBS) $(TIRPC_LIBS) $(RPATH)
 
-# Cliente RPC
+# Ejercicio 3 — Cliente RPC
 cliente_rpc: src/app-cliente.c libproxyclaves-rpc.so
 	$(CC) $(CFLAGS) -o $@ $< -L. -lproxyclaves-rpc $(LIBS) $(RPATH)
 
@@ -102,3 +111,6 @@ stress-rpc: cliente_rpc clavesRPC_server
 clean:
 	rm -f *.o *.so servidor_mq servidor clavesRPC_server \
 	      cliente_local cliente_dist cliente_sock cliente_rpc
+
+distclean: clean
+	rm -f $(RPC_GEN)
