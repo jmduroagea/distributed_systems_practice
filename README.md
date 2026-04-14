@@ -185,11 +185,11 @@ Operations per client are configured via `N_OPS` in `src/app-cliente.c`. Each it
 │   │   ├── claves.c      # API implementation
 │   │   └── hash-table.c  # concurrent hash table
 │   ├── proxy/
-│   │   └── proxy-mq.c    # MQ proxy
+│   │   ├── proxy-mq.c    # MQ proxy
+│   │   └── proxy-sock.c      # TCP proxy
 │   ├── server/
-│   │   └── servidor-mq.c # MQ server
-│   ├── proxy-sock.c      # TCP proxy
-│   └── servidor-sock.c   # TCP server
+│   │   ├── servidor-mq.c # MQ server
+│   │   └── servidor-sock.c   # TCP server
 ├── xxhash/               # hash function
 ├── stress_validator.sh
 └── Makefile

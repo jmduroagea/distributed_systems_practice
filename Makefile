@@ -38,15 +38,15 @@ libproxyclaves.so: src/proxy/proxy-mq.c
 	$(CC) -shared -o $@ proxy.o
 
 # Ejercicio 2 — proxy sockets
-libproxyclaves-sock.so: src/proxy-sock.c
-	$(CC) $(CFLAGS) -fPIC -c src/proxy-sock.c -o proxy-sock.o
+libproxyclaves-sock.so: src/proxy/proxy-sock.c
+	$(CC) $(CFLAGS) -fPIC -c src/proxy/proxy-sock.c -o proxy-sock.o
 	$(CC) -shared -o $@ proxy-sock.o
 
 # ── Ejecutables ───────────────────────────────────────────────────────────────
 servidor_mq: src/server/servidor-mq.c libclaves.so
 	$(CC) $(CFLAGS) -o $@ $< -L. -lclaves $(LIBS) $(RPATH)
 
-servidor: src/servidor-sock.c libclaves.so
+servidor: src/server/servidor-sock.c libclaves.so
 	$(CC) $(CFLAGS) -o $@ $< -L. -lclaves $(LIBS) $(RPATH)
 
 cliente_local: src/app-cliente.c libclaves.so

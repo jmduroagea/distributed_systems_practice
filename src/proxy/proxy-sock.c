@@ -1,4 +1,4 @@
-#include "../include/claves.h"
+#include "../../include/claves.h"
 #include <arpa/inet.h>
 #include <netdb.h>
 #include <netinet/tcp.h>
