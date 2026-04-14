@@ -4,15 +4,15 @@
 # Orquesta servidor + N clientes en paralelo y valida los resultados.
 #
 # Uso: ./stress_validator.sh [opciones]
-#   --modo       local|dist|sock  (default: dist)
-#   --clientes   N                (default: 10)
-#   --cliente    ./ejecutable     (default: según modo)
-#   --servidor   ./ejecutable     (default: según modo)
-#   --timeout    segundos         (default: 30)
-#   --limpiar                     Borra /dev/mqueue antes de empezar
-#   --no-servidor                 No arranca servidor
-#   --ip         dirección        (default: localhost, solo modo sock)
-#   --port       puerto           (default: 8080, solo modo sock)
+#   --modo       local|dist|sock|rpc  (default: dist)
+#   --clientes   N                    (default: 10)
+#   --cliente    ./ejecutable         (default: según modo)
+#   --servidor   ./ejecutable         (default: según modo)
+#   --timeout    segundos             (default: 30)
+#   --limpiar                         Borra /dev/mqueue antes de empezar
+#   --no-servidor                     No arranca servidor
+#   --ip         dirección            (default: localhost)
+#   --port       puerto               (default: 8080, solo modo sock)
 # =============================================================================
 
 GREEN="\033[32m"; RED="\033[31m"; YELLOW="\033[33m"
@@ -58,6 +58,7 @@ if [[ -z "$CLIENTE_EXE" ]]; then
     case "$MODO" in
         local) CLIENTE_EXE="./cliente_local" ;;
         sock)  CLIENTE_EXE="./cliente_sock"  ;;
+        rpc)   CLIENTE_EXE="./cliente_rpc"   ;;
         *)     CLIENTE_EXE="./cliente_dist"  ;;
     esac
 fi
@@ -65,6 +66,7 @@ fi
 if [[ -z "$SERVIDOR_EXE" ]]; then
     case "$MODO" in
         sock) SERVIDOR_EXE="./servidor" ;;
+        rpc)  SERVIDOR_EXE="./clavesRPC_server" ;;
         *)    SERVIDOR_EXE="./servidor_mq" ;;
     esac
 fi
@@ -81,6 +83,7 @@ trap cleanup EXIT
 bold "══════════════════════════════════════════════════════════════"
 bold "  Stress Test Validator  |  modo=$MODO  clientes=$N_CLIENTES"
 [[ "$MODO" == "sock" ]] && bold "  servidor=$SOCK_IP:$SOCK_PORT"
+[[ "$MODO" == "rpc" ]]  && bold "  servidor=$SOCK_IP (RPC)"
 bold "══════════════════════════════════════════════════════════════"
 echo
 
@@ -136,6 +139,9 @@ for (( i=0; i<N_CLIENTES; i++ )); do
     (
         if [[ "$MODO" == "sock" ]]; then
             IP_TUPLAS="$SOCK_IP" PORT_TUPLAS="$SOCK_PORT" \
+            timeout "$TIMEOUT" "$CLIENTE_EXE" "$i" > "$OUT" 2> "$ERR"
+        elif [[ "$MODO" == "rpc" ]]; then
+            IP_TUPLAS="$SOCK_IP" \
             timeout "$TIMEOUT" "$CLIENTE_EXE" "$i" > "$OUT" 2> "$ERR"
         else
             timeout "$TIMEOUT" "$CLIENTE_EXE" "$i" > "$OUT" 2> "$ERR"

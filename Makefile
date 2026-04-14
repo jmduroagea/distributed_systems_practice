@@ -95,6 +95,9 @@ stress-dist: cliente_dist servidor_mq
 stress-local: cliente_local
 	./stress_validator.sh --modo local --no-servidor --cliente ./cliente_local
 
+stress-rpc: cliente_rpc clavesRPC_server
+	./stress_validator.sh --modo rpc --clientes 10 --ip 127.0.0.1
+
 # ── Limpieza ──────────────────────────────────────────────────────────────────
 clean:
 	rm -f *.o *.so servidor_mq servidor clavesRPC_server \
