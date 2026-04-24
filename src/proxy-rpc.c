@@ -100,6 +100,7 @@ int get_value(char *key, char *value1, int *N_value2, float *V_value2,
     args.key = key; // Only the key is needed for the get operation
 
     result_get res;
+    memset(&res, 0, sizeof(res));
     enum clnt_stat stat = get_value_1(args, &res, clnt); // Call the RPC function
     if (stat != RPC_SUCCESS) {
         clnt_perror(clnt, "get_value_1");
@@ -119,6 +120,8 @@ int get_value(char *key, char *value1, int *N_value2, float *V_value2,
     value3->x = res.value3.x;
     value3->y = res.value3.y;
     value3->z = res.value3.z;
+
+    xdr_free((xdrproc_t)xdr_result_get, (char *)&res);      /* This way we don't have memmory leaks in each get_value() */
 
     return 0;
 }

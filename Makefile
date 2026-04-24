@@ -6,7 +6,7 @@
 #   make clean    → borra artefactos compilados
 # ─────────────────────────────────────────────────────────────────────────────
 CC         = gcc
-CFLAGS     = -Wall -O2 -flto -DNDEBUG -I./include -I./xxhash  # release por defecto
+CFLAGS     = -Wall -O2 -I./include  # release por defecto
 LIBS       = -lrt -lpthread
 RPATH      = -Wl,-rpath='$$ORIGIN'
 TIRPC_CFLAGS = -I/usr/include/tirpc
@@ -14,7 +14,7 @@ TIRPC_LIBS   = -ltirpc
 
 .PHONY: all release debug clean stress-sock stress-dist stress-local stress-rpc rpc-gen
 
-ALL_TARGETS = libclaves.so libproxyclaves.so libproxyclaves-rpc.so \
+ALL_TARGETS = libclaves.so libproxyclaves.so libproxyclaves-sock.so libproxyclaves-rpc.so \
               servidor_mq servidor clavesRPC_server \
               cliente_local cliente_dist cliente_sock cliente_rpc
 
@@ -25,7 +25,7 @@ release: $(ALL_TARGETS)
 
 # debug limpia primero para garantizar que todo se recompila con -g/-O0.
 # Para volver a release: make clean && make
-debug: CFLAGS = -Wall -g -O0 -I./include -I./xxhash
+debug: CFLAGS = -Wall -g -O0 -I./include
 debug: clean $(ALL_TARGETS)
 
 # ── rpcgen ────────────────────────────────────────────────────────────────────
@@ -42,11 +42,10 @@ $(RPC_GEN): $(RPC_X)
 rpc-gen: $(RPC_GEN)
 
 # ── Librerías ─────────────────────────────────────────────────────────────────
-libclaves.so: src/utils/claves.c src/utils/hash-table.c xxhash/xxhash.c
-	$(CC) $(CFLAGS) -fPIC -c xxhash/xxhash.c -o xxhash.o
+libclaves.so: src/utils/claves.c src/utils/hash-table.c
 	$(CC) $(CFLAGS) -fPIC -c src/utils/hash-table.c -o hash-table.o
 	$(CC) $(CFLAGS) -fPIC -c src/utils/claves.c -o claves.o
-	$(CC) -shared -o $@ claves.o xxhash.o hash-table.o
+	$(CC) -shared -o $@ claves.o hash-table.o -lpthread
 
 # Ejercicio 1 — proxy MQ
 libproxyclaves.so: src/proxy/proxy-mq.c
