@@ -36,7 +36,10 @@ struct HashEntry {
 struct TableState {
   struct HashEntry *entries;
   uint32_t capacity;
-  atomic_int total_items;
+  /* En su propia línea de caché: cada insert/delete lo modifica, y si
+   * compartiera línea con entries/capacity (que lee TODA operación), cada
+   * escritura obligaría a los demás núcleos a volver a traer esa línea. */
+  alignas(64) atomic_int total_items;
   struct {
     alignas(64) atomic_uint val;
   } segment_locks[NUM_SEGMENTS];
@@ -265,6 +268,23 @@ static void stw_write_lock(struct StwLock *lock) {
 static void stw_write_unlock(struct StwLock *lock) {
   atomic_store_explicit(&lock->writer_active, false, memory_order_release);
   pthread_mutex_unlock(&lock->writer_mutex);
+}
+
+/* ========================================================================= *
+ * STASH: ATAJO PARA EL CASO VACÍO
+ * ========================================================================= */
+/*
+ * El stash solo recibe tuplas cuando un neighborhood entero (64 slots) está
+ * lleno, así que casi siempre está vacío. Aun así, cada insert y cada búsqueda
+ * fallida tomaba stash_lock (un mutex por tabla) y recorría sus STASH_SIZE
+ * slots: un punto de serialización para todos los hilos.
+ *
+ * Invariante: stash_count se incrementa ANTES de publicar una tupla en el stash
+ * y se decrementa DESPUÉS de retirarla. Por tanto, si stash_count == 0, ninguna
+ * tupla es visible en el stash y podemos saltarnos el mutex y el recorrido.
+ */
+static inline bool stash_may_contain_items(struct TableState *state) {
+  return atomic_load_explicit(&state->stash_count, memory_order_acquire) != 0;
 }
 
 /* ========================================================================= *
@@ -756,19 +776,21 @@ int ht_insert(ConcurrentHashTable *table, const struct Tuple *data) {
      * acabe en ambos sitios simultáneamente.
      */
     bool already_exists = false;
-    pthread_mutex_lock(&state->stash_lock);
-    for (int i = 0; i < STASH_SIZE; i++) {
-      struct Tuple *st =
-          atomic_load_explicit(&state->stash[i].data, memory_order_acquire);
-      if (st != NULL &&
-          atomic_load_explicit(&state->stash[i].hash_cache,
-                               memory_order_acquire) == short_hash &&
-          strcmp(st->key, data->key) == 0) {
-        already_exists = true;
-        break;
+    if (stash_may_contain_items(state)) {
+      pthread_mutex_lock(&state->stash_lock);
+      for (int i = 0; i < STASH_SIZE; i++) {
+        struct Tuple *st =
+            atomic_load_explicit(&state->stash[i].data, memory_order_acquire);
+        if (st != NULL &&
+            atomic_load_explicit(&state->stash[i].hash_cache,
+                                 memory_order_acquire) == short_hash &&
+            strcmp(st->key, data->key) == 0) {
+          already_exists = true;
+          break;
+        }
       }
+      pthread_mutex_unlock(&state->stash_lock);
     }
-    pthread_mutex_unlock(&state->stash_lock);
 
     if (already_exists) {
       stw_read_unlock(&table->stw_lock);
@@ -848,10 +870,11 @@ int ht_insert(ConcurrentHashTable *table, const struct Tuple *data) {
     if (!already_exists) {
       for (int i = 0; i < STASH_SIZE; i++) {
         if (atomic_load(&state->stash[i].data) == NULL) {
+          /* Incrementar ANTES de publicar (ver stash_may_contain_items) */
+          atomic_fetch_add(&state->stash_count, 1);
           atomic_store(&state->stash[i].data, new_tuple);
           atomic_store_explicit(&state->stash[i].hash_cache, short_hash,
                                 memory_order_release);
-          atomic_fetch_add(&state->stash_count, 1);
           stash_idx = i;
           break;
         }
@@ -981,7 +1004,7 @@ int ht_get(ConcurrentHashTable *table, const char *key,
   /* Ahora sí es seguro bajar el HP: el seqlock confirmó consistencia */
   hp_clear();
 
-  if (!found) {
+  if (!found && stash_may_contain_items(state)) {
     pthread_mutex_lock(&state->stash_lock);
     for (int i = 0; i < STASH_SIZE; i++) {
       struct Tuple *t = atomic_load(&state->stash[i].data);
@@ -1044,7 +1067,7 @@ int ht_modify(ConcurrentHashTable *table, const struct Tuple *data) {
   }
   neighborhood_write_unlock(state, seg1, seg2);
 
-  if (!modified) {
+  if (!modified && stash_may_contain_items(state)) {
     pthread_mutex_lock(&state->stash_lock);
     for (int i = 0; i < STASH_SIZE; i++) {
       struct Tuple *t = atomic_load(&state->stash[i].data);
@@ -1121,7 +1144,7 @@ int ht_remove(ConcurrentHashTable *table, const char *key) {
   }
   neighborhood_write_unlock(state, seg1, seg2);
 
-  if (!deleted) {
+  if (!deleted && stash_may_contain_items(state)) {
     pthread_mutex_lock(&state->stash_lock);
     for (int i = 0; i < STASH_SIZE; i++) {
       struct Tuple *t = atomic_load(&state->stash[i].data);
@@ -1199,7 +1222,7 @@ bool ht_exists(ConcurrentHashTable *table, const char *key) {
 
   hp_clear();
 
-  if (!found) {
+  if (!found && stash_may_contain_items(state)) {
     pthread_mutex_lock(&state->stash_lock);
     for (int i = 0; i < STASH_SIZE; i++) {
       struct Tuple *t = atomic_load(&state->stash[i].data);
