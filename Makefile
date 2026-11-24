@@ -6,17 +6,18 @@
 #   make clean    → borra artefactos compilados
 # ─────────────────────────────────────────────────────────────────────────────
 CC         = gcc
-CFLAGS     = -Wall -O2 -I./include  # release por defecto
+CFLAGS     = -Wall -O2 -flto -DNDEBUG -I./include -I./xxhash  # release por defecto
 LIBS       = -lrt -lpthread
 RPATH      = -Wl,-rpath='$$ORIGIN'
 TIRPC_CFLAGS = -I/usr/include/tirpc
 TIRPC_LIBS   = -ltirpc
 
-.PHONY: all release debug clean stress-sock stress-dist stress-local stress-rpc rpc-gen
+.PHONY: FORCE all release debug clean bench stress-sock stress-dist stress-local stress-rpc rpc-gen
 
 ALL_TARGETS = libclaves.so libproxyclaves.so libproxyclaves-sock.so libproxyclaves-rpc.so \
               servidor_mq servidor clavesRPC_server \
-              cliente_local cliente_dist cliente_sock cliente_rpc
+              cliente_local cliente_dist cliente_sock cliente_rpc \
+              bench-engine
 
 # ─────────────────────────────────────────────────────────────────────────────
 all: release
@@ -25,7 +26,7 @@ release: $(ALL_TARGETS)
 
 # debug limpia primero para garantizar que todo se recompila con -g/-O0.
 # Para volver a release: make clean && make
-debug: CFLAGS = -Wall -g -O0 -I./include
+debug: CFLAGS = -Wall -g -O0 -I./include -I./xxhash
 debug: clean $(ALL_TARGETS)
 
 # ── rpcgen ────────────────────────────────────────────────────────────────────
@@ -42,10 +43,22 @@ $(RPC_GEN): $(RPC_X)
 rpc-gen: $(RPC_GEN)
 
 # ── Librerías ─────────────────────────────────────────────────────────────────
-libclaves.so: src/utils/claves.c src/utils/hash-table.c
-	$(CC) $(CFLAGS) -fPIC -c src/utils/hash-table.c -o hash-table.o
-	$(CC) $(CFLAGS) -fPIC -c src/utils/claves.c -o claves.o
-	$(CC) -shared -o $@ claves.o hash-table.o -lpthread
+# Motor de almacenamiento: hopscotch (por defecto) | list (solo para benchmark)
+ENGINE ?= hopscotch
+ifeq ($(ENGINE),hopscotch)
+  ENGINE_SRCS = src/utils/hash-table.c xxhash/xxhash.c
+else ifeq ($(ENGINE),list)
+  ENGINE_SRCS = src/utils/linked-list.c
+else
+  $(error ENGINE debe ser 'hopscotch' o 'list' (recibido: '$(ENGINE)'))
+endif
+
+# Fichero sello: solo cambia cuando cambia ENGINE, forzando a recompilar libclaves.so
+.engine: FORCE
+	@echo '$(ENGINE)' | cmp -s - $@ || echo '$(ENGINE)' > $@
+
+libclaves.so: src/utils/claves.c $(ENGINE_SRCS) .engine
+	$(CC) $(CFLAGS) -fPIC -shared -o $@ src/utils/claves.c $(ENGINE_SRCS) -lpthread
 
 # Ejercicio 1 — proxy MQ
 libproxyclaves.so: src/proxy/proxy-mq.c
@@ -92,6 +105,25 @@ clavesRPC_server: src/rpc/clavesRPC_server.c $(RPC_GEN) libclaves.so
 # Ejercicio 3 — Cliente RPC
 cliente_rpc: src/app-cliente.c libproxyclaves-rpc.so
 	$(CC) $(CFLAGS) -o $@ $< -L. -lproxyclaves-rpc $(LIBS) $(RPATH)
+
+# ── Benchmark del motor ───────────────────────────────────────────────────────
+bench-engine: src/bench/bench-engine.c libclaves.so
+	$(CC) $(CFLAGS) -o $@ $< -L. -lclaves $(LIBS) $(RPATH)
+
+# Ejecuta el benchmark con ambos motores y deja libclaves.so con hopscotch.
+# Parámetros extra: make bench BENCH_ARGS="-k 50000 -d 5 -t 1,2,4"
+BENCH_ENGINES = hopscotch list
+BENCH_CSV     = bench_results.csv
+BENCH_ARGS   ?=
+
+bench:
+	@echo "engine,threads,ops_per_sec,errors" > $(BENCH_CSV)
+	@for engine in $(BENCH_ENGINES); do \
+	    $(MAKE) --no-print-directory -s ENGINE=$$engine bench-engine || exit 1; \
+	    ./bench-engine -e $$engine $(BENCH_ARGS) >> $(BENCH_CSV) || exit 1; \
+	done
+	@$(MAKE) --no-print-directory -s ENGINE=hopscotch bench-engine
+	@column -t -s, $(BENCH_CSV) 2>/dev/null || cat $(BENCH_CSV)
 
 # ── Stress tests ──────────────────────────────────────────────────────────────
 stress-sock: cliente_sock servidor

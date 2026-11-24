@@ -11,6 +11,9 @@ cliente_sock
 servidor_mq
 clavesRPC_server
 cliente_rpc
+.engine
+bench-engine
+bench_results.csv
 
 # Archivos de sistema y editores
 .DS_Store
@@ -22,3 +25,9 @@ cliente_rpc
 # Colas de mensajes (si se crearan en local por error)
 /dev/mqueue/*
 compile_commands.json
+
+# Ficheros generados por rpcgen (make los regenera desde clavesRPC.x)
+src/rpc/clavesRPC.h
+src/rpc/clavesRPC_clnt.c
+src/rpc/clavesRPC_svc.c
+src/rpc/clavesRPC_xdr.c
