@@ -22,23 +22,7 @@
 #define MAX_VAL1_LEN 256
 #define MAX_VEC_LEN 32
 
-#define DEBUG_MODE 0 // Change to 1 to enable debug logs
-
-#if DEBUG_MODE
-#define LOG_INFO(...)                                                          \
-  {                                                                            \
-    printf("[INFO] " __VA_ARGS__);                                             \
-    fflush(stdout);                                                            \
-  }
-#define LOG_ERR(...)                                                           \
-  {                                                                            \
-    fprintf(stderr, "[ERR] " __VA_ARGS__);                                     \
-    fflush(stderr);                                                            \
-  }
-#else
-#define LOG_INFO(...)
-#define LOG_ERR(...)
-#endif
+#include "../../include/log.h"
 
 // Atomic flag to control server shutdown from signal handlers. Workers check
 // this flag to exit gracefully

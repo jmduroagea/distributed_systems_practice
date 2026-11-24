@@ -23,9 +23,9 @@ bool_t set_value_1_svc(write_args arg1, result_simple *result,
 bool_t get_value_1_svc(key_arg arg1, result_get *result,
                        struct svc_req *rqstp) {
   // Local Buffer
-  char value1[256];
+  char value1[RPC_MAX_STR + 1];
   int N_value2;
-  float V_value2[32];
+  float V_value2[RPC_MAX_V2];
   struct Paquete value3;
 
   memset(result, 0, sizeof(*result));

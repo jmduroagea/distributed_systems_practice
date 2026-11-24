@@ -6,11 +6,15 @@
 #   make clean    → borra artefactos compilados
 # ─────────────────────────────────────────────────────────────────────────────
 CC         = gcc
-CFLAGS     = -Wall -O2 -flto -DNDEBUG -I./include -I./xxhash  # release por defecto
+# Logs de depuración de los servidores: make clean && make DEBUG_LOGS=1
+DEBUG_LOGS ?= 0
+CFLAGS     = -Wall -O2 -flto -DNDEBUG -I./include -I./xxhash -DDEBUG_MODE=$(DEBUG_LOGS)  # release por defecto
 LIBS       = -lrt -lpthread
 RPATH      = -Wl,-rpath='$$ORIGIN'
 TIRPC_CFLAGS = -I/usr/include/tirpc
 TIRPC_LIBS   = -ltirpc
+# Código generado por rpcgen: declara variables que no usa y no lo editamos a mano
+RPCGEN_CFLAGS = -Wno-unused-variable
 
 .PHONY: FORCE all release debug clean bench stress-sock stress-dist stress-local stress-rpc rpc-gen
 
@@ -26,7 +30,7 @@ release: $(ALL_TARGETS)
 
 # debug limpia primero para garantizar que todo se recompila con -g/-O0.
 # Para volver a release: make clean && make
-debug: CFLAGS = -Wall -g -O0 -I./include -I./xxhash
+debug: CFLAGS = -Wall -g -O0 -I./include -I./xxhash -DDEBUG_MODE=$(DEBUG_LOGS)
 debug: clean $(ALL_TARGETS)
 
 # ── rpcgen ────────────────────────────────────────────────────────────────────
@@ -73,8 +77,8 @@ libproxyclaves-sock.so: src/proxy/proxy-sock.c
 # Ejercicio 3 — proxy RPC (depende de ficheros autogenerados)
 libproxyclaves-rpc.so: src/proxy-rpc.c $(RPC_GEN)
 	$(CC) $(CFLAGS) $(TIRPC_CFLAGS) -fPIC -c src/proxy-rpc.c -o proxy-rpc.o
-	$(CC) $(CFLAGS) $(TIRPC_CFLAGS) -fPIC -c src/rpc/clavesRPC_clnt.c -o clavesRPC_clnt.o
-	$(CC) $(CFLAGS) $(TIRPC_CFLAGS) -fPIC -c src/rpc/clavesRPC_xdr.c -o clavesRPC_xdr.o
+	$(CC) $(CFLAGS) $(TIRPC_CFLAGS) $(RPCGEN_CFLAGS) -fPIC -c src/rpc/clavesRPC_clnt.c -o clavesRPC_clnt.o
+	$(CC) $(CFLAGS) $(TIRPC_CFLAGS) $(RPCGEN_CFLAGS) -fPIC -c src/rpc/clavesRPC_xdr.c -o clavesRPC_xdr.o
 	$(CC) -shared -o $@ proxy-rpc.o clavesRPC_clnt.o clavesRPC_xdr.o $(TIRPC_LIBS)
 
 # ── Ejecutables ───────────────────────────────────────────────────────────────
@@ -98,8 +102,8 @@ cliente_sock: src/app-cliente.c libproxyclaves-sock.so
 # Ejercicio 3 — Servidor RPC (depende de ficheros autogenerados + libclaves)
 clavesRPC_server: src/rpc/clavesRPC_server.c $(RPC_GEN) libclaves.so
 	$(CC) $(CFLAGS) $(TIRPC_CFLAGS) -c src/rpc/clavesRPC_server.c -o clavesRPC_server.o
-	$(CC) $(CFLAGS) $(TIRPC_CFLAGS) -c src/rpc/clavesRPC_svc.c -o clavesRPC_svc.o
-	$(CC) $(CFLAGS) $(TIRPC_CFLAGS) -c src/rpc/clavesRPC_xdr.c -o clavesRPC_xdr_srv.o
+	$(CC) $(CFLAGS) $(TIRPC_CFLAGS) $(RPCGEN_CFLAGS) -c src/rpc/clavesRPC_svc.c -o clavesRPC_svc.o
+	$(CC) $(CFLAGS) $(TIRPC_CFLAGS) $(RPCGEN_CFLAGS) -c src/rpc/clavesRPC_xdr.c -o clavesRPC_xdr_srv.o
 	$(CC) -o $@ clavesRPC_server.o clavesRPC_svc.o clavesRPC_xdr_srv.o -L. -lclaves $(LIBS) $(TIRPC_LIBS) $(RPATH)
 
 # Ejercicio 3 — Cliente RPC

@@ -18,23 +18,7 @@
 #include "../../include/claves.h"
 #include "../../include/mensajes.h"
 
-#define DEBUG_MODE 0 // Set to 1 to enable logging
-
-#if DEBUG_MODE
-#define LOG_INFO(...)                                                          \
-  {                                                                            \
-    printf("[INFO] " __VA_ARGS__);                                             \
-    fflush(stdout);                                                            \
-  }
-#define LOG_ERR(...)                                                           \
-  {                                                                            \
-    fprintf(stderr, "[ERROR] " __VA_ARGS__);                                   \
-    fflush(stderr);                                                            \
-  }
-#else
-#define LOG_INFO(...)
-#define LOG_ERR(...)
-#endif
+#include "../../include/log.h"
 
 mqd_t q_servidor = (mqd_t)-1;
 atomic_int server_running = 1;
@@ -56,16 +40,6 @@ void handle_sigint(int sig) {
 /* ========================================================================= *
  * HELPERS
  * ========================================================================= */
-long get_max_queue_depth() {
-  FILE *f = fopen("/proc/sys/fs/mqueue/msg_max", "r");
-  long max_msg = 10;
-  if (f) {
-    fscanf(f, "%ld", &max_msg);
-    fclose(f);
-  }
-  return max_msg;
-}
-
 int send_response(mqd_t q, const void *response, size_t response_size) {
   struct timespec timeout;
   clock_gettime(CLOCK_REALTIME, &timeout);
@@ -244,7 +218,7 @@ int main(int argc, char **argv) {
     exit(EXIT_FAILURE);
   }
   LOG_INFO("Cola servidor creada: %s (maxmsg=%ld, msgsize=%zu)\n", SERVER_QUEUE,
-           max_msgs, sizeof(Peticion));
+           attr.mq_maxmsg, sizeof(Peticion));
 
   // 4. Inicializar tabla de datos
   if (destroy() == -1)
